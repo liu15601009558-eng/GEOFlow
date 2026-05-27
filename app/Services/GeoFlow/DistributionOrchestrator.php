@@ -88,9 +88,7 @@ class DistributionOrchestrator
                 $this->log('info', '文章已进入分发队列', $channel->id, $distribution->id, $articleModel->id, [
                     'event' => 'distribution.queued',
                 ]);
-                ProcessArticleDistributionJob::dispatch((int) $distribution->id)
-                    ->onQueue('distribution')
-                    ->afterCommit();
+                ProcessArticleDistributionJob::dispatch((int) $distribution->id)->onQueue('distribution');
             }
         } catch (Throwable $e) {
             $this->log('error', '文章分发入队失败：'.$e->getMessage(), null, null, $article instanceof Article ? (int) $article->id : $article, [
@@ -185,10 +183,7 @@ class DistributionOrchestrator
                         'idempotency_key' => $this->idempotencyKey((int) $distribution->article_id, (int) $channel->id, 'update'),
                     ])->save();
 
-                    ProcessArticleDistributionJob::dispatch((int) $distribution->id)
-                        ->onQueue('distribution')
-                        ->afterCommit();
-
+                    ProcessArticleDistributionJob::dispatch((int) $distribution->id)->onQueue('distribution');
                     $count++;
                 }
             });
