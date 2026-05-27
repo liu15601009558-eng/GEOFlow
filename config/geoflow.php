@@ -83,7 +83,10 @@ return [
     'csrf_token_name' => env('GEOFLOW_CSRF_TOKEN_NAME', 'csrf_token'),
 
     // ai_models API Key enc:v1 根材料（仅在此读取 APP_KEY；应用代码禁止 env()，统一 config('geoflow.api_key_crypto_roots')）
-    'api_key_crypto_roots' => array_values(array_filter([(string) env('APP_KEY', '')])),
+    'api_key_crypto_roots' => array_values(array_filter([
+            (string) env('APP_KEY', ''),
+            (string) env('APP_SECRET_KEY', ''),  // legacy root for keys encrypted before Laravel migration
+        ])),
 
     // 登录失败锁定前允许尝试次数
     'max_login_attempts' => (int) env('GEOFLOW_MAX_LOGIN_ATTEMPTS', 5),

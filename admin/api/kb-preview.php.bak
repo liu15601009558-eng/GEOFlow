@@ -1,0 +1,110 @@
+<?php
+/**
+ * 知识库内容预览API
+ * 支持单知识库(kb_id)和多知识库(kb_ids逗号分隔)
+ */
+
+define('FEISHU_TREASURE', true);
+session_start();
+
+require_once __DIR__ . '/../includes/config.php';
+require_once __DIR__ . '/../includes/database_admin.php';
+require_once __DIR__ . '/../includes/functions.php';
+
+// 检查管理员登录
+require_admin_login();
+
+// 立即释放session锁
+session_write_close();
+
+header('Content-Type: application/json');
+
+// 支持两种参数：kb_id（单选）和 kb_ids（多选逗号分隔）
+$kb_ids = [];
+
+// 新参数：kb_ids（逗号分隔）
+if (!empty($_GET['kb_ids'])) {
+    $kb_ids = array_map('intval', explode(',', $_GET['kb_ids']));
+    $kb_ids = array_filter($kb_ids, function($id) { return $id > 0; });
+}
+
+// 兼容旧参数：kb_id
+if (!empty($_GET['kb_id'])) {
+    $kb_id = intval($_GET['kb_id']);
+    if ($kb_id > 0) {
+        $kb_ids[] = $kb_id;
+    }
+}
+
+// 去重
+$kb_ids = array_unique($kb_ids);
+
+if (empty($kb_ids)) {
+    echo json_encode(['success' => false, 'error' => '无效的知识库ID']);
+    exit;
+}
+
+try {
+    // 获取所有选中知识库的基本信息
+    $stmt = $db->prepare("SELECT id, name, description, created_at FROM knowledge_bases WHERE id IN (" . implode(',', array_fill(0, count($kb_ids), '?')) . ")");
+    $stmt->execute($kb_ids);
+    $kb_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    if (empty($kb_list)) {
+        echo json_encode(['success' => false, 'error' => '知识库不存在']);
+        exit;
+    }
+    
+    // 创建知识库ID到名称的映射
+    $kb_names = [];
+    foreach ($kb_list as $kb) {
+        $kb_names[$kb['id']] = $kb['name'];
+    }
+    
+    // 获取所有选中知识库中的文档列表（只取前5个）
+    $stmt = $db->prepare("
+        SELECT id, title, file_type, created_at, knowledge_base_id 
+        FROM knowledge_documents 
+        WHERE knowledge_base_id IN (" . implode(',', array_fill(0, count($kb_ids), '?')) . ")
+        ORDER BY created_at DESC 
+        LIMIT 5
+    ");
+    $stmt->execute($kb_ids);
+    $documents = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // 为每个文档添加知识库名称
+    foreach ($documents as &$doc) {
+        $doc['kb_name'] = $kb_names[$doc['knowledge_base_id']] ?? '';
+    }
+    
+    // 获取文档总数
+    $stmt = $db->prepare("SELECT COUNT(*) FROM knowledge_documents WHERE knowledge_base_id IN (" . implode(',', array_fill(0, count($kb_ids), '?')) . ")");
+    $stmt->execute($kb_ids);
+    $doc_count = $stmt->fetchColumn();
+    
+    // 获取向量片段总数
+    $stmt = $db->prepare("SELECT COUNT(*) FROM knowledge_embeddings WHERE knowledge_base_id IN (" . implode(',', array_fill(0, count($kb_ids), '?')) . ")");
+    $stmt->execute($kb_ids);
+    $embedding_count = $stmt->fetchColumn();
+    
+    // 返回第一个知识库作为主信息（兼容单选场景）
+    $kb = $kb_list[0];
+    
+    echo json_encode([
+        'success' => true,
+        'data' => [
+            'id' => $kb['id'],
+            'name' => $kb['name'],
+            'description' => $kb['description'],
+            'created_at' => $kb['created_at'],
+            'kb_count' => count($kb_ids),
+            'kb_names' => $kb_names,
+            'doc_count' => $doc_count,
+            'embedding_count' => $embedding_count,
+            'documents' => $documents
+        ]
+    ]);
+    
+} catch (Exception $e) {
+    echo json_encode(['success' => false, 'error' => '获取失败: ' . $e->getMessage()]);
+}
