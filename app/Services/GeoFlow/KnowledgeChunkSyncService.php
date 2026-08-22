@@ -820,10 +820,17 @@ class KnowledgeChunkSyncService
         );
 
         try {
-            $response = Embeddings::for([$this->formatEmbeddingQueryInput($query, $embeddingMetadata)])
-                ->timeout(45)
-                ->generate($providerName, (string) $embeddingMetadata['model_name']);
-            $rawVector = $this->normalizeEmbeddingVector($response->embeddings[0] ?? null);
+            // NVIDIA embedding API 需要 input_type: "query" 用于查询向量。
+            if ($this->isNvidiaEmbeddingApi($embeddingMetadata)) {
+                $queryInput = $this->formatEmbeddingQueryInput($query, $embeddingMetadata);
+                $nvidiaVectors = $this->generateNvidiaEmbeddingDirect([$queryInput], $embeddingMetadata);
+                $rawVector = $this->normalizeEmbeddingVector($nvidiaVectors[0] ?? null);
+            } else {
+                $response = Embeddings::for([$this->formatEmbeddingQueryInput($query, $embeddingMetadata)])
+                    ->timeout(45)
+                    ->generate($providerName, (string) $embeddingMetadata['model_name']);
+                $rawVector = $this->normalizeEmbeddingVector($response->embeddings[0] ?? null);
+            }
             if ($rawVector === null) {
                 return [];
             }
@@ -1013,6 +1020,30 @@ class KnowledgeChunkSyncService
     ): array {
         $batchKeys = array_keys($batch);
         $batchInputs = $this->formatEmbeddingDocumentInputs(array_values($batch), $embeddingMetadata, $documentTitle);
+
+        // NVIDIA embedding API 需要 input_type 参数，Laravel Embeddings facade 不支持。
+        // 当检测到 NVIDIA API 时，直接用 curl 调用。
+        if ($this->isNvidiaEmbeddingApi($embeddingMetadata)) {
+            $nvidiaVectors = $this->generateNvidiaEmbeddingDirect($batchInputs, $embeddingMetadata);
+            $results = [];
+            foreach ($nvidiaVectors as $position => $rawVector) {
+                if ($rawVector === [] || $rawVector === null) {
+                    throw new \RuntimeException('invalid_embedding_vector');
+                }
+                $actualDimensions = count($rawVector);
+                $results[$batchKeys[$position]] = [
+                    'model_id' => (int) $embeddingMetadata['model_id'],
+                    'dimensions' => $actualDimensions,
+                    'provider' => (string) $embeddingMetadata['provider'],
+                    'vector' => $rawVector,
+                    'vector_literal' => $canStoreEmbeddingVector
+                        ? $this->vectorLiteral($this->padVector($rawVector, $this->embeddingStorageDimensions()))
+                        : null,
+                ];
+            }
+            return $results;
+        }
+
         $response = Embeddings::for($batchInputs)
             ->timeout(45)
             ->generate($providerName, (string) $embeddingMetadata['model_name']);
@@ -1038,6 +1069,67 @@ class KnowledgeChunkSyncService
         }
 
         return $results;
+    }
+
+    /**
+     * 检测是否为需要 input_type 参数的 NVIDIA embedding API。
+     */
+    private function isNvidiaEmbeddingApi(array $embeddingMetadata): bool
+    {
+        $url = strtolower((string) ($embeddingMetadata['api_url'] ?? ''));
+        return str_contains($url, 'integrate.api.nvidia.com')
+            || str_contains($url, 'ai.api.nvidia.com');
+    }
+
+    /**
+     * 直接调用 NVIDIA embedding API（包含 input_type 参数）。
+     * 绕过 Laravel Embeddings facade，因为 facade 不支持传递额外 body 参数。
+     *
+     * @param  list<string>  $inputs
+     * @return list<list<float>>
+     */
+    private function generateNvidiaEmbeddingDirect(array $inputs, array $embeddingMetadata): array
+    {
+        $apiUrl = rtrim((string) ($embeddingMetadata['api_url'] ?? ''), '/');
+        if (str_ends_with($apiUrl, '/v1')) {
+            $apiUrl = substr($apiUrl, 0, -3) . '/v1/embeddings';
+        } elseif (!str_ends_with($apiUrl, '/embeddings')) {
+            $apiUrl .= '/v1/embeddings';
+        }
+
+        $apiKey = (string) ($embeddingMetadata['api_key'] ?? '');
+        $modelName = (string) ($embeddingMetadata['model_name'] ?? '');
+
+        $ch = curl_init($apiUrl);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 45);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
+            'model' => $modelName,
+            'input' => $inputs,
+            'input_type' => 'passage',
+        ]));
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . $apiKey,
+        ]);
+        $resp = curl_exec($ch);
+        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = curl_error($ch);
+        curl_close($ch);
+
+        if ($code !== 200) {
+            throw new \RuntimeException("NVIDIA embedding API failed: HTTP $code - " . substr((string) $resp, 0, 300));
+        }
+
+        $result = json_decode((string) $resp, true);
+        $embeddings = $result['data'] ?? [];
+        $vectors = [];
+        foreach ($embeddings as $emb) {
+            $vectors[] = $emb['embedding'] ?? [];
+        }
+
+        return $vectors;
     }
 
     private function isEmbeddingBatchSizeError(string $message): bool
