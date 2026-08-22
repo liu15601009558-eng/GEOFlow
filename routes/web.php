@@ -27,6 +27,7 @@ use App\Http\Controllers\Admin\SecuritySettingsController;
 use App\Http\Controllers\Admin\SiteSettingsController;
 use App\Http\Controllers\Admin\TaskController;
 use App\Http\Controllers\Admin\TitleLibraryController;
+use App\Http\Controllers\Admin\TrackingController;
 use App\Http\Controllers\Admin\UrlImportController;
 use App\Http\Controllers\Site\ArchiveController;
 use App\Http\Controllers\Site\ArticleController as SiteArticleController;
@@ -275,6 +276,14 @@ Route::prefix($adminPrefix)->name('admin.')->middleware(['admin.locale'])->group
                 Route::post('/', [ApiTokenController::class, 'store'])->name('store');
                 Route::post('{tokenId}/revoke', [ApiTokenController::class, 'revoke'])->name('revoke');
             });
+        });
+
+        // 发布效果追踪
+        Route::prefix('tracking')->name('tracking.')->group(function () {
+            Route::get('/', [TrackingController::class, 'index'])->name('index');
+            Route::post('check-now', [TrackingController::class, 'checkNow'])->name('check-now');
+            Route::get('article/{article}', [TrackingController::class, 'show'])->name('show')->whereNumber('article');
+            Route::get('api/summary', [TrackingController::class, 'apiSummary'])->name('api-summary');
         });
     });
 });

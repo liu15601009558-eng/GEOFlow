@@ -91,4 +91,19 @@ class Article extends Model
     {
         return $query->where('status', 'published')->whereNull('deleted_at');
     }
+
+    /**
+     * 文章状态变更观察器：发布后自动加入收录追踪队列。
+     */
+    protected static function boot(): void
+    {
+        parent::boot();
+
+        static::updated(function (Article $article) {
+            // 文章刚发布时，自动加入追踪队列
+            if ($article->isDirty('status') && $article->status === 'published' && $article->getOriginal('status') !== 'published') {
+                \App\Jobs\TrackArticleIndexJob::dispatch($article->id);
+            }
+        });
+    }
 }
