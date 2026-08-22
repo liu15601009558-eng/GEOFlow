@@ -27,3 +27,17 @@
 Homestead.json
 Homestead.yaml
 Thumbs.db
+
+# 本地数据/备份/运行目录
+/backups
+/nursing-bed-acquisition/nursing-bed-acquisition/queue
+/nursing-bed-acquisition/nursing-bed-acquisition/cookies
+/nursing-bed-acquisition/nursing-bed-acquisition/data
+/nursing-bed-articles
+/scripts/venv
+/scripts/state
+/nursing-bed-acquisition/nursing-bed-acquisition/docs
+# Docker 构建产物
+/.hermes
+# 生产配置
+/env.prod

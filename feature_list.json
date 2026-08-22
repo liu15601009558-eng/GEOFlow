@@ -1,0 +1,226 @@
+{
+  "metadata": {
+    "project": "GEOFlow",
+    "version": "1.0.0",
+    "last_updated": "2026-06-03",
+    "maintainer": "liupeng"
+  },
+  "features": [
+    {
+      "id": "article-generation",
+      "name": "文章生成",
+      "description": "使用 AI 模型自动生成 SEO 文章",
+      "status": "completed",
+      "components": [
+        "WorkerExecutionService",
+        "ProcessGeoFlowTaskJob",
+        "AiModel",
+        "AiModelGroup"
+      ],
+      "related_files": [
+        "app/Services/GeoFlow/WorkerExecutionService.php",
+        "app/Jobs/ProcessGeoFlowTaskJob.php",
+        "app/Models/AiModel.php",
+        "app/Models/AiModelGroup.php"
+      ]
+    },
+    {
+      "id": "article-publishing",
+      "name": "文章发布",
+      "description": "将生成的文章从 draft 状态发布为 published",
+      "status": "completed",
+      "components": [
+        "WorkerExecutionService::publishDueDraftArticle"
+      ],
+      "related_files": [
+        "app/Services/GeoFlow/WorkerExecutionService.php"
+      ]
+    },
+    {
+      "id": "distribution-system",
+      "name": "文章分发系统",
+      "description": "将发布的文章分发到目标站点",
+      "status": "completed",
+      "components": [
+        "DistributionOrchestrator",
+        "DistributionHttpClient",
+        "ProcessArticleDistributionJob"
+      ],
+      "related_files": [
+        "app/Services/GeoFlow/DistributionOrchestrator.php",
+        "app/Services/GeoFlow/DistributionHttpClient.php",
+        "app/Jobs/ProcessArticleDistributionJob.php"
+      ]
+    },
+    {
+      "id": "model-group-rotation",
+      "name": "模型组轮换",
+      "description": "支持多个 AI 模型的轮换和故障转移",
+      "status": "completed",
+      "components": [
+        "AiModelGroup",
+        "AiModelGroupMember",
+        "WorkerExecutionService::resolveAiModelCandidates"
+      ],
+      "related_files": [
+        "app/Models/AiModelGroup.php",
+        "app/Models/AiModelGroupMember.php",
+        "app/Services/GeoFlow/WorkerExecutionService.php"
+      ]
+    },
+    {
+      "id": "task-scheduling",
+      "name": "任务调度",
+      "description": "定时执行文章生成和发布任务",
+      "status": "completed",
+      "components": [
+        "TaskLifecycleService",
+        "GeoFlowScheduleTasksCommand"
+      ],
+      "related_files": [
+        "app/Services/GeoFlow/TaskLifecycleService.php",
+        "app/Console/Commands/GeoFlowScheduleTasksCommand.php"
+      ]
+    },
+    {
+      "id": "admin-dashboard",
+      "name": "管理后台",
+      "description": "Web 管理界面，用于配置任务、查看状态等",
+      "status": "completed",
+      "components": [
+        "DashboardController",
+        "TaskController",
+        "ArticleController",
+        "AiModelController"
+      ],
+      "related_files": [
+        "app/Http/Controllers/Admin/DashboardController.php",
+        "app/Http/Controllers/Admin/TaskController.php",
+        "app/Http/Controllers/Admin/ArticleController.php",
+        "app/Http/Controllers/Admin/AiModelController.php"
+      ]
+    },
+    {
+      "id": "knowledge-base",
+      "name": "知识库",
+      "description": "管理文章生成所需的知识库内容",
+      "status": "completed",
+      "components": [
+        "KnowledgeBase",
+        "KnowledgeChunk",
+        "KnowledgeChunkSyncService"
+      ],
+      "related_files": [
+        "app/Models/KnowledgeBase.php",
+        "app/Models/KnowledgeChunk.php",
+        "app/Services/GeoFlow/KnowledgeChunkSyncService.php"
+      ]
+    },
+    {
+      "id": "keyword-library",
+      "name": "关键词库",
+      "description": "管理 SEO 关键词",
+      "status": "completed",
+      "components": [
+        "KeywordLibrary",
+        "Keyword"
+      ],
+      "related_files": [
+        "app/Models/KeywordLibrary.php",
+        "app/Models/Keyword.php"
+      ]
+    },
+    {
+      "id": "title-library",
+      "name": "标题库",
+      "description": "管理文章标题模板",
+      "status": "completed",
+      "components": [
+        "TitleLibrary",
+        "Title"
+      ],
+      "related_files": [
+        "app/Models/TitleLibrary.php",
+        "app/Models/Title.php"
+      ]
+    },
+    {
+      "id": "image-library",
+      "name": "图片库",
+      "description": "管理文章配图",
+      "status": "completed",
+      "components": [
+        "ImageLibrary",
+        "Image"
+      ],
+      "related_files": [
+        "app/Models/ImageLibrary.php",
+        "app/Models/Image.php"
+      ]
+    },
+    {
+      "id": "article-tracking",
+      "name": "文章追踪",
+      "description": "追踪文章发布效果和收录状态",
+      "status": "completed",
+      "components": [
+        "ArticleTracking"
+      ],
+      "related_files": [
+        "app/Models/ArticleTracking.php"
+      ]
+    },
+    {
+      "id": "url-import",
+      "name": "URL 导入",
+      "description": "从 URL 导入内容到知识库",
+      "status": "completed",
+      "components": [
+        "UrlImportProcessingService",
+        "UrlImportJob"
+      ],
+      "related_files": [
+        "app/Services/GeoFlow/UrlImportProcessingService.php",
+        "app/Models/UrlImportJob.php"
+      ]
+    },
+    {
+      "id": "remote-site-sync",
+      "name": "远程站点同步",
+      "description": "通过 sync_article.php 接口同步文章到远程 EyouCMS 站点",
+      "status": "completed",
+      "components": [
+        "sync_article.php",
+        "push_to_site.php"
+      ],
+      "related_files": [
+        "public/sync_article.php",
+        "bin/push_to_site.php"
+      ]
+    },
+    {
+      "id": "horizon-monitoring",
+      "name": "Horizon 监控",
+      "description": "使用 Laravel Horizon 监控队列状态",
+      "status": "completed",
+      "components": [
+        "HorizonServiceProvider",
+        "HorizonMetricsAdapter"
+      ],
+      "related_files": [
+        "app/Providers/HorizonServiceProvider.php",
+        "app/Services/GeoFlow/HorizonMetricsAdapter.php"
+      ]
+    }
+  ],
+  "in_progress": [],
+  "planned": [
+    {
+      "id": "quality-check",
+      "name": "文章质量检查",
+      "description": "自动检查生成文章的质量",
+      "status": "planned",
+      "notes": "数据库表已创建，但调度链路未建立"
+    }
+  ]
+}
