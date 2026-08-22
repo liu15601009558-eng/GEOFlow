@@ -13,9 +13,10 @@ class DistributionPayloadBuilder
     /**
      * 构造目标站 Agent 可稳定消费的文章分发载荷。
      *
+     * @param  array{id?:int, name?:string, slug?:string}|null  $overrideCategory  自动分类返回的栏目信息，非空则覆盖文章原有栏目
      * @return array<string,mixed>
      */
-    public function build(Article $article): array
+    public function build(Article $article, ?array $overrideCategory = null): array
     {
         $article->loadMissing([
             'category:id,name,slug',
@@ -28,6 +29,13 @@ class DistributionPayloadBuilder
         $body = ArticleHtmlPresenter::stripLeadingTitleHeading($content, $title);
         $contentHtml = ArticleHtmlPresenter::markdownToHtml($body);
         $heroImageUrl = $this->heroImageUrl($article);
+
+        // 使用自动分类结果覆盖栏目（如有）
+        $categoryData = $overrideCategory ?? ($article->category ? [
+            'id' => (int) $article->category->id,
+            'name' => (string) $article->category->name,
+            'slug' => (string) ($article->category->slug ?? ''),
+        ] : null);
 
         return [
             'version' => '1.0',
@@ -47,11 +55,7 @@ class DistributionPayloadBuilder
                 'status' => (string) $article->status,
                 'published_at' => $article->published_at?->toISOString(),
                 'updated_at' => $article->updated_at?->toISOString(),
-                'category' => $article->category ? [
-                    'id' => (int) $article->category->id,
-                    'name' => (string) $article->category->name,
-                    'slug' => (string) ($article->category->slug ?? ''),
-                ] : null,
+                'category' => $categoryData,
                 'author' => $article->author ? [
                     'id' => (int) $article->author->id,
                     'name' => (string) $article->author->name,

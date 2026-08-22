@@ -67,7 +67,37 @@ class DistributionOrchestrator
                 return;
             }
 
-            $payload = $this->payloadBuilder->build($articleModel);
+            // 自动分类：对 geoflow_agent 渠道调用目标站 auto_classify 接口
+            $articleModel->loadMissing('task:distribution_channel_id,category_mode,fixed_category_id');
+            $autoClassifyCategory = null;
+            $targetDistChannelId = (int) ($articleModel->task?->distribution_channel_id ?? 0);
+            if ($targetDistChannelId > 0) {
+                $distChannel = DistributionChannel::query()->find($targetDistChannelId);
+                if ($distChannel && $distChannel->status === 'active') {
+                    $publisher = $this->publisherManager->forChannel($distChannel);
+                    if ($publisher instanceof GeoFlowAgentPublisher) {
+                        $classifyResult = $publisher->autoClassify($distChannel, [
+                            'title' => (string) $articleModel->title,
+                            'keywords' => (string) ($articleModel->keywords ?? ''),
+                            'content' => mb_substr((string) $articleModel->content, 0, 2000),
+                        ]);
+                        if ($classifyResult['success'] && ! empty($classifyResult['category_id'])) {
+                            $autoClassifyCategory = [
+                                'id' => $classifyResult['category_id'],
+                                'name' => $classifyResult['category_name'] ?? '',
+                                'slug' => '',
+                            ];
+                            $this->log('info', '自动分类结果：栏目 "'.$classifyResult['category_name'].'" (ID: '.$classifyResult['category_id'].')', $distChannel->id, null, $articleModel->id, [
+                                'event' => 'article.auto_classified',
+                                'category_id' => $classifyResult['category_id'],
+                                'category_name' => $classifyResult['category_name'],
+                            ]);
+                        }
+                    }
+                }
+            }
+
+            $payload = $this->payloadBuilder->build($articleModel, $autoClassifyCategory);
             $payloadHash = hash('sha256', json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '');
 
             foreach ($channels as $channel) {
@@ -121,12 +151,35 @@ class DistributionOrchestrator
             'last_error_message' => null,
         ])->save();
 
-        $payload = $this->payloadBuilder->build($article);
+        // 自动分类：调用目标站 sync_article.php?action=auto_classify
+        $overrideCategory = null;
+        $article->loadMissing('category:id,name,slug');
+        $publisher = $this->publisherManager->forChannel($channel);
+        if ($publisher instanceof GeoFlowAgentPublisher) {
+            $classifyResult = $publisher->autoClassify($channel, [
+                'title' => (string) $article->title,
+                'keywords' => (string) ($article->keywords ?? ''),
+                'content' => mb_substr((string) $article->content, 0, 2000),
+            ]);
+            if ($classifyResult['success'] && ! empty($classifyResult['category_id'])) {
+                $overrideCategory = [
+                    'id' => $classifyResult['category_id'],
+                    'name' => $classifyResult['category_name'] ?? '',
+                    'slug' => '',
+                ];
+                $this->log('info', '自动分类结果：栏目 "'.$classifyResult['category_name'].'" (ID: '.$classifyResult['category_id'].')', $channel->id, $distribution->id, $article->id, [
+                    'event' => 'article.auto_classified',
+                    'category_id' => $classifyResult['category_id'],
+                    'category_name' => $classifyResult['category_name'],
+                ]);
+            }
+        }
+
+        $payload = $this->payloadBuilder->build($article, $overrideCategory);
         if ((string) $distribution->action === 'update') {
             $payload['event'] = 'article.update';
         }
 
-        $publisher = $this->publisherManager->forChannel($channel);
         $response = match ((string) $distribution->action) {
             'update' => $publisher->update($distribution, $payload),
             'delete' => $publisher->delete($distribution),
@@ -233,7 +286,28 @@ class DistributionOrchestrator
             throw new \RuntimeException('分发记录缺少文章或渠道');
         }
 
-        $payload = $action === 'delete' ? [] : $this->payloadBuilder->build($article);
+        // 自动分类：对 geoflow_agent 渠道调用目标站 auto_classify 接口（仅 update 操作）
+        $overrideCategory = null;
+        if ($action !== 'delete') {
+            $publisher = $this->publisherManager->forChannel($channel);
+            if ($publisher instanceof GeoFlowAgentPublisher) {
+                $article->loadMissing('category:id,name,slug');
+                $classifyResult = $publisher->autoClassify($channel, [
+                    'title' => (string) $article->title,
+                    'keywords' => (string) ($article->keywords ?? ''),
+                    'content' => mb_substr((string) $article->content, 0, 2000),
+                ]);
+                if ($classifyResult['success'] && ! empty($classifyResult['category_id'])) {
+                    $overrideCategory = [
+                        'id' => $classifyResult['category_id'],
+                        'name' => $classifyResult['category_name'] ?? '',
+                        'slug' => '',
+                    ];
+                }
+            }
+        }
+
+        $payload = $action === 'delete' ? [] : $this->payloadBuilder->build($article, $overrideCategory);
         if ($action === 'update') {
             $payload['event'] = 'article.update';
         }

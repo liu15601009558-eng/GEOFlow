@@ -142,6 +142,92 @@ class DistributionHttpClient
     }
 
     /**
+     * 调用目标站 sync_article.php?action=auto_classify 接口，根据标题和关键词自动推荐栏目。
+     *
+     * @param  array{title:string, keywords?:string, content?:string}  $context
+     * @return array{success:bool, category_id?:int, category_name?:string, reason?:string}
+     */
+    public function autoClassify(DistributionChannel $channel, array $context): array
+    {
+        $channel->loadMissing('activeSecret');
+        $secret = $channel->activeSecret;
+        if (! $secret) {
+            return ['success' => false, 'reason' => '分发渠道有效密钥不存在'];
+        }
+
+        $path = '/sync_article.php';
+        $payload = [
+            'action' => 'auto_classify',
+            'title' => $context['title'],
+        ];
+        if (! empty($context['keywords'])) {
+            $payload['keywords'] = $context['keywords'];
+        }
+        if (! empty($context['content'])) {
+            $payload['content'] = $context['content'];
+        }
+
+        $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if (! is_string($body)) {
+            return ['success' => false, 'reason' => '载荷 JSON 编码失败'];
+        }
+
+        $endpoint = $this->endpoint($channel, $path);
+        $response = $this->postSignedJson($secret, $endpoint, $path, $body, 'article.auto_classify', 'auto-classify-'.time(), 30);
+
+        if ($response->status() === 404 && $this->canUseIndexPhpFallback($channel)) {
+            $fallbackEndpoint = $this->indexPhpEndpoint($channel, $path);
+            $fallbackResponse = $this->postSignedJson($secret, $fallbackEndpoint, $path, $body, 'article.auto_classify', 'auto-classify-'.time(), 30);
+            if (! $fallbackResponse->failed()) {
+                return $this->decodeAutoClassifyResponse($fallbackResponse);
+            }
+        }
+
+        if ($response->failed()) {
+            return ['success' => false, 'reason' => 'HTTP '.$response->status().': '.$this->summarizeResponseBody($response->body())];
+        }
+
+        return $this->decodeAutoClassifyResponse($response);
+    }
+
+    /**
+     * @return array{success:bool, category_id?:int, category_name?:string, reason?:string}
+     */
+    private function decodeAutoClassifyResponse(Response $response): array
+    {
+        $json = $response->json();
+        if (! is_array($json)) {
+            return ['success' => false, 'reason' => '目标站返回非 JSON 响应'];
+        }
+
+        // 格式1: chengenyiliao.cn 风格 {code:0, data:{category_id:xx, ...}}
+        if (isset($json['code']) && isset($json['data']) && is_array($json['data'])) {
+            if ((int) $json['code'] === 0) {
+                $data = $json['data'];
+                return [
+                    'success' => true,
+                    'category_id' => isset($data['category_id']) ? (int) $data['category_id'] : null,
+                    'category_name' => $data['category_name'] ?? null,
+                    'reason' => $data['message'] ?? null,
+                ];
+            }
+            return ['success' => false, 'reason' => $json['message'] ?? '目标站返回错误'];
+        }
+
+        // 格式2: 标准风格 {success:true, category_id:xx, ...}
+        if (! ($json['success'] ?? false)) {
+            return ['success' => false, 'reason' => $json['reason'] ?? '未知错误'];
+        }
+
+        return [
+            'success' => true,
+            'category_id' => isset($json['category_id']) ? (int) $json['category_id'] : null,
+            'category_name' => $json['category_name'] ?? null,
+            'reason' => $json['reason'] ?? null,
+        ];
+    }
+
+    /**
      * @param  array<string,mixed>  $payload
      * @return array<string,mixed>
      */

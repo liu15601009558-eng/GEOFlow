@@ -33,4 +33,15 @@ class GeoFlowAgentPublisher implements DistributionPublisherInterface
     {
         return $this->httpClient->syncSiteSettings($channel);
     }
+
+    /**
+     * 根据标题/关键词自动推荐目标站栏目。
+     *
+     * @param  array{title:string, keywords?:string, content?:string}  $context
+     * @return array{success:bool, category_id?:int, category_name?:string, reason?:string}
+     */
+    public function autoClassify(DistributionChannel $channel, array $context): array
+    {
+        return $this->httpClient->autoClassify($channel, $context);
+    }
 }
