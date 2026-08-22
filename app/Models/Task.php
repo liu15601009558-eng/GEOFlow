@@ -140,4 +140,12 @@ class Task extends Model
             ->withPivot(['trigger', 'remote_status', 'failure_policy', 'max_attempts'])
             ->withTimestamps();
     }
+
+    /**
+     * 关联模型组（用于 failover 自动切换）。
+     */
+    public function modelGroup(): BelongsTo
+    {
+        return $this->belongsTo(AiModelGroup::class, 'model_group_id');
+    }
 }

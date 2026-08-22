@@ -4,6 +4,7 @@ namespace App\Services\GeoFlow;
 
 use App\Ai\Agents\MarkdownContentWriterAgent;
 use App\Models\AiModel;
+use App\Models\AiModelGroup;
 use App\Models\Article;
 use App\Models\ArticleImage;
 use App\Models\Author;
@@ -325,6 +326,13 @@ class WorkerExecutionService
                 $content = $this->generateContent($candidate, $contentPrompt);
                 $attempts[] = $this->buildModelAttempt($candidate, 'success', null);
 
+                // round_robin 轮转：更新模型组的 last_used_model_id
+                if ($task->model_group_id > 0) {
+                    AiModelGroup::query()
+                        ->whereKey((int) $task->model_group_id)
+                        ->update(['last_used_model_id' => (int) $candidate->id]);
+                }
+
                 return [
                     'content' => $content,
                     'model' => $candidate,
@@ -349,9 +357,91 @@ class WorkerExecutionService
 
     /**
      * @return list<AiModel>
+     *
+     * 优先使用 model_group_id 进行 failover 轮换；
+     * 未绑定模型组时回退到 ai_model_id + failover_priority 的旧逻辑。
      */
     private function resolveAiModelCandidates(Task $task): array
     {
+        // 优先使用模型组（failover 策略）
+        if ($task->model_group_id > 0) {
+            $modelGroup = AiModelGroup::query()
+                ->whereKey($task->model_group_id)
+                ->where('is_active', true)
+                ->first();
+
+            if ($modelGroup) {
+                // 获取成员列表（按优先级排序）
+                $members = $modelGroup->members()
+                    ->orderBy('priority')
+                    ->get()
+                    ->all();
+
+                if (empty($members)) {
+                    return [];
+                }
+
+                // round_robin 策略：从 last_used_model_id 之后开始轮转
+                if ($modelGroup->strategy === 'round_robin') {
+                    $lastUsed = (int) ($modelGroup->last_used_model_id ?? -1);
+                    $rotated = [];
+                    $found = false;
+                    // 从 lastUsed 之后的第一条开始
+                    foreach ($members as $member) {
+                        if ((int) $member->model_id === $lastUsed) {
+                            $found = true;
+                            continue;
+                        }
+                        if ($found) {
+                            $rotated[] = (int) $member->model_id;
+                        }
+                    }
+                    // lastUsed 之前的条目追加到前面
+                    foreach ($members as $member) {
+                        if ((int) $member->model_id === $lastUsed) {
+                            break;
+                        }
+                        $rotated[] = (int) $member->model_id;
+                    }
+                    $memberModelIds = $rotated;
+                } else {
+                    $memberModelIds = collect($members)->pluck('model_id')->map(fn($v) => (int) $v)->toArray();
+                }
+
+                if (empty($memberModelIds)) {
+                    return [];
+                }
+
+                // 直接查询 AiModel 表，确保返回 AiModel 实例
+                $models = AiModel::query()
+                    ->whereIn('id', $memberModelIds)
+                    ->where('status', 'active')
+                    ->where(function ($query) {
+                        $query->whereNull('model_type')
+                            ->orWhere('model_type', '')
+                            ->orWhere('model_type', 'chat');
+                    })
+                    ->get()
+                    ->all();
+
+                // 按 memberModelIds 顺序排列（round_robin 已重排，其他策略保持原顺序）
+                $modelMap = [];
+                foreach ($models as $model) {
+                    $modelMap[(int) $model->id] = $model;
+                }
+
+                $sorted = [];
+                foreach ($memberModelIds as $id) {
+                    if (isset($modelMap[(int) $id])) {
+                        $sorted[] = $modelMap[(int) $id];
+                    }
+                }
+
+                return array_values($sorted);
+            }
+        }
+
+        // 回退到旧逻辑：ai_model_id + failover_priority
         $primaryModel = $this->resolveAiModel($task);
         if (($task->model_selection_mode ?? 'fixed') !== 'smart_failover') {
             return [$primaryModel];
