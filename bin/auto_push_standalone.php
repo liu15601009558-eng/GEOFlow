@@ -18,6 +18,28 @@ $pushedCount = 0;
 $failedCount = 0;
 
 // Clean emoji (4-byte UTF-8 chars)
+function generateCleanSummary($content, $maxLen = 200) {
+    if (empty($content)) return '';
+    $clean = $content;
+    // 移除Markdown图片：![alt](url)
+    $clean = preg_replace('/!\[[^\]]*\]\([^)]+\)/', '', $clean);
+    // 移除残留模式：! image /img/xxx.jpg
+    $clean = preg_replace('/!\s*image\s+\S+/', '', $clean);
+    // 移除HTML图片标签
+    $clean = preg_replace('/<img[^>]*>/i', '', $clean);
+    // 移除其他Markdown链接
+    $clean = preg_replace('/\[[^\]]*\]\([^)]+\)/', '', $clean);
+    // 移除HTML标签
+    $clean = strip_tags($clean);
+    // 合并空白
+    $clean = preg_replace('/\s+/', ' ', $clean);
+    $clean = trim($clean);
+    if (mb_strlen($clean, 'UTF-8') > $maxLen) {
+        $clean = mb_substr($clean, 0, $maxLen, 'UTF-8') . '...';
+    }
+    return $clean;
+}
+
 function cleanEmojiForSync($text) {
     if (empty($text)) return $text;
     $clean = '';
@@ -58,13 +80,25 @@ function cleanAIOutputForSync($content) {
 // Convert markdown to HTML
 function convertMarkdownToHtml($content) {
     if (empty($content)) return $content;
+    // Fix spaces in image paths before Markdown conversion
+    // Convert ![image](/img/file with spaces.jpg) to ![image](/img/file%20with%20spaces.jpg)
+    $content = preg_replace_callback('/!\[[^\]]*\]\(([^)]+)\)/', function($m) {
+        $url = $m[1];
+        // URL-encode spaces in the URL
+        $url = str_replace(' ', '%20', $url);
+        return '![' . $m[0][2] . '](' . $url . ')';
+    }, $content);
     $parsedown = new Parsedown();
     $parsedown->setSafeMode(false);
     $parsedown->setBreaksEnabled(true);
     $html = $parsedown->text($content);
-    $baseUrl = "https://img.chengenyiliao.cn";
+    $baseUrl = "https://www.chengenyiliao.cn";
+    // Fix /uploads/ paths
     $html = preg_replace('#src="(/uploads/[^"]+)"#i', 'src="' . $baseUrl . '$1"', $html);
     $html = preg_replace('#src="(uploads/[^"]+)"#i', 'src="' . $baseUrl . '/$1"', $html);
+    // Fix /img/ paths
+    $html = preg_replace('#src="(/img/[^"]+)"#i', 'src="' . $baseUrl . '$1"', $html);
+    $html = preg_replace('#src="(img/[^"]+)"#i', 'src="' . $baseUrl . '/$1"', $html);
     return $html;
 }
 
@@ -79,7 +113,7 @@ if (!class_exists('Parsedown')) {
     }
 }
 
-$limit = 10;
+$limit = 200;
 
 // Get active sites
 $sites = DB::table('target_sites')->where('status', 'active')->get();
@@ -115,7 +149,7 @@ foreach ($sites as $site) {
         $postData = json_encode([
             'title' => cleanEmojiForSync($article->title),
             'content' => convertMarkdownToHtml(cleanAIOutputForSync(cleanEmojiForSync($article->content))),
-            'description' => cleanEmojiForSync($article->meta_description ?? ''),
+            'description' => cleanEmojiForSync($article->meta_description ?: generateCleanSummary($article->content)),
             'category_id' => $site->default_category_id,
             'seo_keywords' => cleanEmojiForSync($article->keywords ?? $site->default_keywords),
             'seo_description' => cleanEmojiForSync($article->meta_description ?? ''),

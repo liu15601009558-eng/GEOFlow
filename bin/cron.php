@@ -281,8 +281,12 @@ function convertMarkdownToHtml($content) {
     $parsedown->setBreaksEnabled(true);
     $html = $parsedown->text($content);
     $baseUrl = "https://img.chengenyiliao.cn";
+    // Fix /uploads/ paths
     $html = preg_replace('#src="(/uploads/[^"]+)"#i', 'src="' . $baseUrl . '$1"', $html);
     $html = preg_replace('#src="(uploads/[^"]+)"#i', 'src="' . $baseUrl . '/$1"', $html);
+    // Fix /img/ paths
+    $html = preg_replace('#src="(/img/[^"]+)"#i', 'src="' . $baseUrl . '$1"', $html);
+    $html = preg_replace('#src="(img/[^"]+)"#i', 'src="' . $baseUrl . '/$1"', $html);
     return $html;
 }
 
