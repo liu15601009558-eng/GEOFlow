@@ -30,6 +30,7 @@ services:
     command: ["php", "artisan", "queue:work", "database", "--queue=geoflow,distribution,default", "--sleep=1", "--tries=3", "--timeout=300"]
     volumes:
       - ./:/var/www/html
+      - ./infra/php-queue-memory.ini:/usr/local/etc/php/conf.d/99-geoflow-memory.ini:ro
     restart: unless-stopped
 
   scheduler:
