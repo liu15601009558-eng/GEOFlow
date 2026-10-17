@@ -8,6 +8,10 @@
 .env.prod
 .env.backup
 .env.production
+# .env 备份不得进版本库（含真实密钥）；.example 模板例外，允许提交
+.env.*.bak-*
+.env.prod.bak-*
+.env.bak-*
 .phpactor.json
 .phpunit.result.cache
 /.fleet
