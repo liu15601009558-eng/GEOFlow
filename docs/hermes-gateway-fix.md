@@ -449,4 +449,52 @@ v2raya (PID 68558, root)   ← v2raya.service: active + enabled, Restart=on-fail
 | `~/.openclaw/openclaw.json.bak-tgoff-20261017-*` | 禁用 openclaw telegram 前 |
 | `~/.hermes/hermes-agent/agent/message_sanitization.py.bak-20261014175245` | HTTP 400 修复前（51279 bytes） |
 | `~/.cache/gost-unit.bak-20261017-105555` | gost unit 备份（0 行，可能需 `systemctl cat` 取） |
-> ```
+| `GEOFlow/backups/env-snapshots/.env.prod.bak-composer-20261017-192916` | COMPOSER_ON_START 改动前的 .env.prod（含真实密钥，已移入 gitignored 目录） |
+
+---
+
+## 十五、queue worker 重启循环排查（2026-10-17，结论：不改，已优化开销）
+
+### 15.1 现象
+`geo-system-queue` `RestartCount` 高达 3700+，每 ~2 分钟重启一次，每次重启都跑一遍 `composer install`（40 包）+ `artisan migrate`。
+
+### 15.2 根因（已验证，非 OOM）
+- 重启 **exit code = 12**，即 Laravel `Illuminate\Queue\Worker::EXIT_MEMORY_LIMIT`（`Worker.php:30`）。
+- 触发逻辑 `Worker.php:331`：`memoryExceeded($options->memory)`，判定式 `memory_get_usage(true) >= --memory`。
+- `--memory` 默认 **128MB**（`artisan queue:work --help` → `[default: "128"]`），生产 `command` **未传该参数**，一直用默认值。
+- 因此 worker 内存涨过 128M 时 **Laravel 主动优雅退出**，非内核 OOM（`OOMKilled=false`）。
+
+### 15.3 修正两条过时假设
+1. **"fetchAll 大结果集 OOM"**：全 `app/` 目录搜索 `fetchAll` **0 命中**，代码中不存在该调用。旧记录不准确，已更新 memory。
+2. **"executeSingleExecution"**：同样不存在（`WorkerExecutionService.php` 只有 `executeTask`）。
+
+### 15.4 实测证明：抬阈值会更糟（已回滚）
+尝试 `--memory=512 --max-jobs=100 --max-time=1800`：
+- exit 12 消失，但变成 **exit 255**（PHP 致命崩溃）。
+- 日志：`Allowed memory size of 536870912 bytes exhausted` + 首个 `FAIL`。
+- 结论：抬阈值只是延迟崩溃，并把"优雅退出（任务重新入队）"变成"硬崩溃（任务失败）"。**已回滚至原命令。**
+
+### 15.5 已采用的优化：`COMPOSER_ON_START=false`
+改 `.env.prod` 追加 `COMPOSER_ON_START=false`（entrypoint 有兜底：vendor 缺失仍会安装）。
+
+| 指标 | 改动前 | 改动后 |
+|---|---|---|
+| 每周期 composer install | 1 次（~30s） | **0 次** |
+| 重启间隙 | ~30s | **~4s** |
+| FAIL / FatalError | 0 | 0 / 0 |
+
+保留 `AUTO_MIGRATE` 默认 true 作兜底（部署新代码时自动迁移），不关闭。
+
+### 15.6 当前状态与决策
+exit 12 循环**仍存在**（Laravel 设计行为），任务 **0 失败 0 丢失**。
+**不改动内存阈值、不重构业务代码**——无 profile 数据支撑热点位置，且唯一实测过的"修复"已证明有害。
+若日后要根治，正确路径：先在 `executeTask` 三段（`resolveKnowledgeContext` / `generateContentWithModelSelection` / `insertTaskImagesIntoContent`）插 `memory_get_usage(true)` 打点跑 24h，拿到真实峰值分布后再定位。
+
+### 15.7 附带修复：`.env` 备份密钥泄露风险
+`.gitignore` 只忽略 `.env.prod`，**不忽略** `.env.prod.bak-*`；而备份含真实 `DB_PASSWORD`/`APP_SECRET_KEY`/`APP_KEY`。若执行 `git add -A` 会把密钥提交进公开仓库。
+处理：
+- 备份移入已 gitignored 的 `backups/env-snapshots/`（保留未删）。
+- `.gitignore` 增加 `.env.*.bak-*` / `.env.prod.bak-*` / `.env.bak-*`，`.example` 模板保持可提交（已用 `git check-ignore` 双向验证）。
+- 提交 `4aacf19` 已推送。
+
+⚠️ `.env.prod` 本身被 gitignore，`COMPOSER_ON_START=false` 只在生产机生效；换机器或从代码重建需重新设置。
