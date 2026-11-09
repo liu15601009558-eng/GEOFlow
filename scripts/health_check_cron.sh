@@ -7,11 +7,14 @@ LOG_DIR="/home/liupeng/GEOFlow/logs"
 STATE_DIR="/home/liupeng/GEOFlow/scripts/state"
 mkdir -p "$LOG_DIR" "$STATE_DIR"
 
+# 本地机密（gitignore 排除），轮换密钥后同步更新此文件
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/secrets.local.env"
+
 COOLDOWN=3600  # 同一问题3600秒内不重复告警
 
 SITES=(
-    "程恩医疗器械|https://www.chengenyiliao.cn/health.php?token=health_check_2026"
-    "铁塔厂|https://www.tietachang.com/health.php?token=health_check_2026"
+    "程恩医疗器械|https://www.chengenyiliao.cn/health.php?token=$HEALTH_TOKEN"
+    "铁塔厂|https://www.tietachang.com/health.php?token=$HEALTH_TOKEN"
 )
 
 send_alert() {

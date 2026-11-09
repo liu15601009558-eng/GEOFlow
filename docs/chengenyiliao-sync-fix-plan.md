@@ -106,18 +106,18 @@ WHERE created_at > '2026-06-04' GROUP BY target, status;"
 
 # 2. 检查 EyouCMS 后台文章数量
 curl -sL "https://www.chengenyiliao.cn/sync_article.php?action=list_titles&limit=1" \
-  -H "X-Sync-Token: geoflow_sync_2026_ceyl" | grep -o '"aid":[0-9]*' | tail -1
+  -H "X-Sync-Token: $SYNC_TOKEN_CEL" | grep -o '"aid":[0-9]*' | tail -1
 
 # 3. 检查文章 URL 可访问
 curl -sI "https://www.chengenyiliao.cn/Related_knowledge/3131.html" | head -3
 
 # 4. 清 EyouCMS 运行时缓存（新文章可能需要）
-sshpass -p 'wf52sd4q' ssh -o StrictHostKeyChecking=no -p 22000 root@211.149.151.138 \
+sshpass -p '$REMOTE_ROOT_PASS' ssh -o StrictHostKeyChecking=no -p 22000 root@211.149.151.138 \
   'rm -rf /www/wwwroot/chengenyiliao.cn/runtime/*'
 
 # 5. 检查分类是否正确
 curl -sL "https://www.chengenyiliao.cn/sync_article.php?action=list_titles&limit=10&offset=3120" \
-  -H "X-Sync-Token: geoflow_sync_2026_ceyl" | python3 -c "
+  -H "X-Sync-Token: $SYNC_TOKEN_CEL" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
 for a in data['data'][-5:]:

@@ -388,7 +388,7 @@ function autoPushToSite($limit = 10) {
                 CURLOPT_POSTFIELDS => $postData,
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_TIMEOUT => 30,
-                CURLOPT_SSL_VERIFYPEER => false,
+                CURLOPT_SSL_VERIFYPEER => true,
                 CURLOPT_HTTPHEADER => [
                     'Content-Type: application/json',
                     'X-Sync-Token: ' . $site['sync_token'],

@@ -5,6 +5,9 @@
 LOG_FILE="/home/liupeng/GEOFlow/logs/health_check_$(date +%Y%m%d).log"
 mkdir -p /home/liupeng/GEOFlow/logs
 
+# 本地机密（gitignore 排除），轮换密钥后同步更新此文件
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/secrets.local.env"
+
 echo "=== GEOFlow 健康检查 $(date) ===" | tee -a $LOG_FILE
 
 # 1. 检查重复文章
@@ -12,7 +15,7 @@ echo "" | tee -a $LOG_FILE
 echo "【1】重复文章检查" | tee -a $LOG_FILE
 
 # 程恩医疗器械
-CHENGEN_DUP=$(ssh -i ~/.ssh/211.149.151.138_id_ed25519 -p 22000 root@211.149.151.138 "mysql -u chengenyiliao_cn -p'ScQGH7QXYX' chengenyiliao_cn -N -e \"
+CHENGEN_DUP=$(ssh -i ~/.ssh/211.149.151.138_id_ed25519 -p 22000 root@211.149.151.138 "mysql -u chengenyiliao_cn -p'$CHENGEN_DB_PASS' chengenyiliao_cn -N -e \"
 SELECT COUNT(*) FROM (
     SELECT title, COUNT(*) as cnt 
     FROM ey_archives 
@@ -29,7 +32,7 @@ else
 fi
 
 # 铁塔厂
-TIETACHANG_DUP=$(ssh -i ~/.ssh/211.149.151.138_id_ed25519 -p 22000 root@211.149.151.138 "mysql -u tietachang_com -p'WJczF8BtizAsbbTX' tietachang_com -N -e \"
+TIETACHANG_DUP=$(ssh -i ~/.ssh/211.149.151.138_id_ed25519 -p 22000 root@211.149.151.138 "mysql -u tietachang_com -p'$TIETACHANG_DB_PASS' tietachang_com -N -e \"
 SELECT COUNT(*) FROM (
     SELECT title, COUNT(*) as cnt 
     FROM ey_archives 
@@ -49,7 +52,7 @@ fi
 echo "" | tee -a $LOG_FILE
 echo "【2】图片URL检查" | tee -a $LOG_FILE
 
-CHENGEN_BAD_IMG=$(ssh -i ~/.ssh/211.149.151.138_id_ed25519 -p 22000 root@211.149.151.138 "mysql -u chengenyiliao_cn -p'ScQGH7QXYX' chengenyiliao_cn -N -e \"
+CHENGEN_BAD_IMG=$(ssh -i ~/.ssh/211.149.151.138_id_ed25519 -p 22000 root@211.149.151.138 "mysql -u chengenyiliao_cn -p'$CHENGEN_DB_PASS' chengenyiliao_cn -N -e \"
 SELECT COUNT(*) FROM ey_article_content 
 WHERE content LIKE '%img.chengenyiliao.cn%';
 \"" 2>/dev/null)
@@ -64,7 +67,7 @@ fi
 echo "" | tee -a $LOG_FILE
 echo "【3】SEO描述检查" | tee -a $LOG_FILE
 
-CHENGEN_BAD_DESC=$(ssh -i ~/.ssh/211.149.151.138_id_ed25519 -p 22000 root@211.149.151.138 "mysql -u chengenyiliao_cn -p'ScQGH7QXYX' chengenyiliao_cn -N -e \"
+CHENGEN_BAD_DESC=$(ssh -i ~/.ssh/211.149.151.138_id_ed25519 -p 22000 root@211.149.151.138 "mysql -u chengenyiliao_cn -p'$CHENGEN_DB_PASS' chengenyiliao_cn -N -e \"
 SELECT COUNT(*) FROM ey_archives 
 WHERE is_del = 0 
 AND (seo_description LIKE '%! image%' 
@@ -82,9 +85,9 @@ fi
 echo "" | tee -a $LOG_FILE
 echo "【4】同步接口检查" | tee -a $LOG_FILE
 
-CHENGEN_API=$(curl -sL -o /dev/null -w "%{http_code}" "https://www.chengenyiliao.cn/sync_article.php?action=status" -H "X-Sync-Token: geoflow_sync_2026_ceyl" 2>/dev/null)
-TIETACHANG_API=$(curl -sL -o /dev/null -w "%{http_code}" "https://www.tietachang.com/sync_article.php?action=status" -H "X-Sync-Token: geoflow_sync_2026_ceyl" 2>/dev/null)
-TOWER_API=$(curl -sL -o /dev/null -w "%{http_code}" "https://90817.com/sync_article.php?action=status" -H "X-Sync-Token: geoflow_sync_2026_90817_monopole" 2>/dev/null)
+CHENGEN_API=$(curl -sL -o /dev/null -w "%{http_code}" "https://www.chengenyiliao.cn/sync_article.php?action=status" -H "X-Sync-Token: $SYNC_TOKEN_CEL" 2>/dev/null)
+TIETACHANG_API=$(curl -sL -o /dev/null -w "%{http_code}" "https://www.tietachang.com/sync_article.php?action=status" -H "X-Sync-Token: $SYNC_TOKEN_CEL" 2>/dev/null)
+TOWER_API=$(curl -sL -o /dev/null -w "%{http_code}" "https://90817.com/sync_article.php?action=status" -H "X-Sync-Token: $SYNC_TOKEN_90817" 2>/dev/null)
 
 if [ "$CHENGEN_API" = "200" ]; then
     echo "✅ 程恩医疗器械: API正常" | tee -a $LOG_FILE
@@ -108,8 +111,8 @@ fi
 echo "" | tee -a $LOG_FILE
 echo "【5】文章数量统计" | tee -a $LOG_FILE
 
-CHENGEN_COUNT=$(ssh -i ~/.ssh/211.149.151.138_id_ed25519 -p 22000 root@211.149.151.138 "mysql -u chengenyiliao_cn -p'ScQGH7QXYX' chengenyiliao_cn -N -e \"SELECT COUNT(*) FROM ey_archives WHERE is_del = 0;\"" 2>/dev/null)
-TIETACHANG_COUNT=$(ssh -i ~/.ssh/211.149.151.138_id_ed25519 -p 22000 root@211.149.151.138 "mysql -u tietachang_com -p'WJczF8BtizAsbbTX' tietachang_com -N -e \"SELECT COUNT(*) FROM ey_archives WHERE is_del = 0;\"" 2>/dev/null)
+CHENGEN_COUNT=$(ssh -i ~/.ssh/211.149.151.138_id_ed25519 -p 22000 root@211.149.151.138 "mysql -u chengenyiliao_cn -p'$CHENGEN_DB_PASS' chengenyiliao_cn -N -e \"SELECT COUNT(*) FROM ey_archives WHERE is_del = 0;\"" 2>/dev/null)
+TIETACHANG_COUNT=$(ssh -i ~/.ssh/211.149.151.138_id_ed25519 -p 22000 root@211.149.151.138 "mysql -u tietachang_com -p'$TIETACHANG_DB_PASS' tietachang_com -N -e \"SELECT COUNT(*) FROM ey_archives WHERE is_del = 0;\"" 2>/dev/null)
 
 echo "程恩医疗器械: $CHENGEN_COUNT 篇" | tee -a $LOG_FILE
 echo "铁塔厂: $TIETACHANG_COUNT 篇" | tee -a $LOG_FILE

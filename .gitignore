@@ -38,6 +38,8 @@ Thumbs.db
 /nursing-bed-articles
 /scripts/venv
 /scripts/state
+# 本地机密（健康检查脚本引用，含真实密码/token）
+/scripts/secrets.local.env
 /nursing-bed-acquisition/nursing-bed-acquisition/docs
 # Docker 构建产物
 /.hermes

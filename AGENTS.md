@@ -169,13 +169,13 @@ docker restart geo-system-queue
 
 ### 5. 远程站点同步
 
-远程站点使用 `sync_article.php` 接口，需要配置 Token：
+远程站点使用 `sync_article.php` 接口，需要配置 Token（变量取值见 `scripts/secrets.local.env`，本地文件不入库）：
 
 ```bash
 # 测试远程站点连接
 curl -X POST https://www.chengenyiliao.cn/sync_article.php \
   -H "Content-Type: application/json" \
-  -H "X-Sync-Token: geoflow_sync_2026_ceyl" \
+  -H "X-Sync-Token: $SYNC_TOKEN_CEL" \
   -d '{"title":"test","content":"test","description":"test","category_id":0}'
 ```
 

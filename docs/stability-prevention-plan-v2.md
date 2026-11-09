@@ -72,17 +72,17 @@
 $SITE_CONFIGS = [
     'chengenyiliao' => [
         'url' => 'https://www.chengenyiliao.cn/sync_article.php',
-        'token' => 'geoflow_sync_2026_ceyl',
+        'token' => '$SYNC_TOKEN_CEL',
         'domain' => 'https://www.chengenyiliao.cn',
     ],
     'tietachang' => [
         'url' => 'https://www.tietachang.com/sync_article.php',
-        'token' => 'geoflow_sync_2026_ceyl',
+        'token' => '$SYNC_TOKEN_CEL',
         'domain' => 'https://www.tietachang.com',
     ],
     '90817' => [
         'url' => 'https://90817.com/sync_article.php',
-        'token' => 'geoflow_sync_2026_90817_monopole',
+        'token' => '$SYNC_TOKEN_90817',
         'domain' => 'https://90817.com',
     ],
 ];
@@ -261,9 +261,9 @@ if ($action === 'health') {
 # 通过HTTP API检查，不依赖SSH
 
 SITES=(
-    "chengenyiliao|https://www.chengenyiliao.cn/sync_article.php?action=health|geoflow_sync_2026_ceyl"
-    "tietachang|https://www.tietachang.com/sync_article.php?action=health|geoflow_sync_2026_ceyl"
-    "90817|https://90817.com/sync_article.php?action=health|geoflow_sync_2026_90817_monopole"
+    "chengenyiliao|https://www.chengenyiliao.cn/sync_article.php?action=health|$SYNC_TOKEN_CEL"
+    "tietachang|https://www.tietachang.com/sync_article.php?action=health|$SYNC_TOKEN_CEL"
+    "90817|https://90817.com/sync_article.php?action=health|$SYNC_TOKEN_90817"
 )
 
 ALERT_URL="https://open.feishu.cn/open-apis/bot/v2/hook/xxx"  # 飞书机器人

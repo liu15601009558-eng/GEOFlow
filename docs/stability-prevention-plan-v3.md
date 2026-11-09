@@ -179,7 +179,7 @@ $description = $rawDesc;
 header('Content-Type: application/json; charset=utf-8');
 
 $token = $_GET['token'] ?? '';
-$validToken = 'health_check_2026';  // 独立token，不用sync_token
+$validToken = '$HEALTH_TOKEN';  // 独立token，不用sync_token
 
 if ($token !== $validToken) {
     http_response_code(403);
@@ -258,8 +258,8 @@ ALERT_URL="${FEISHU_WEBHOOK_URL:-}"  # 从环境变量读取
 COOLDOWN=3600  # 同一问题3600秒内不重复告警
 
 SITES=(
-    "程恩医疗器械|https://www.chengenyiliao.cn/health.php?token=health_check_2026"
-    "铁塔厂|https://www.tietachang.com/health.php?token=health_check_2026"
+    "程恩医疗器械|https://www.chengenyiliao.cn/health.php?token=$HEALTH_TOKEN"
+    "铁塔厂|https://www.tietachang.com/health.php?token=$HEALTH_TOKEN"
 )
 
 send_alert() {
@@ -348,8 +348,8 @@ docker cp geo-system-web:/var/www/html/bin/auto_push_standalone.php $BACKUP_DIR/
 
 # 备份数据库表结构
 ssh -p 22000 root@211.149.151.138 "
-mysqldump -u chengenyiliao_cn -p'ScQGH7QXYX' chengenyiliao_cn ey_archives --no-data > $BACKUP_DIR/chengenyiliao_schema.sql
-mysqldump -u tietachang_com -p'WJczF8BtizAsbbTX' tietachang_com ey_archives --no-data > $BACKUP_DIR/tietachang_schema.sql
+mysqldump -u chengenyiliao_cn -p'$CHENGEN_DB_PASS' chengenyiliao_cn ey_archives --no-data > $BACKUP_DIR/chengenyiliao_schema.sql
+mysqldump -u tietachang_com -p'$TIETACHANG_DB_PASS' tietachang_com ey_archives --no-data > $BACKUP_DIR/tietachang_schema.sql
 "
 
 echo "备份完成: $BACKUP_DIR"
@@ -392,7 +392,7 @@ echo "回滚完成"
 ```bash
 # 测试程恩医疗器械
 curl -sL -X POST "https://www.chengenyiliao.cn/sync_article.php" \
-  -H "X-Sync-Token: geoflow_sync_2026_ceyl" \
+  -H "X-Sync-Token: $SYNC_TOKEN_CEL" \
   -H "Content-Type: application/json" \
   -d '{
     "title": "测试文章_请删除",
@@ -411,7 +411,7 @@ curl -sL -X POST "https://www.chengenyiliao.cn/sync_article.php" \
 
 # 清理测试数据
 curl -sL "https://www.chengenyiliao.cn/sync_article.php?action=delete&ids=xxxxx" \
-  -H "X-Sync-Token: geoflow_sync_2026_ceyl"
+  -H "X-Sync-Token: $SYNC_TOKEN_CEL"
 ```
 
 ---

@@ -113,7 +113,7 @@ function callSensenova(string $apiUrl, string $apiKey, string $modelId, string $
     curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_TIMEOUT, 60);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
     $hdr = sprintf('Authorization: %s %s', 'Bearer', $apiKey);
     curl_setopt($ch, CURLOPT_HTTPHEADER, [
         'Content-Type: application/json',
