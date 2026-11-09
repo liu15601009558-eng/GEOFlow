@@ -926,18 +926,18 @@ function frontSiteUrl(array $config, string $path): string
     return $origin.frontSitePath($config, $path);
 }
 
-function renderHomePageHtml(array $config): string
+function renderHomePageHtml(array $config, ?array $articles = null): string
 {
     ob_start();
-    renderHomePage($config);
+    renderHomePage($config, $articles);
 
     return (string) ob_get_clean();
 }
 
-function renderArticlePageHtml(array $config, string $slug): string
+function renderArticlePageHtml(array $config, array $article, ?array $allArticles = null): string
 {
     ob_start();
-    renderArticlePage($config, $slug);
+    renderArticlePageBody($config, $article, (string) ($article['slug'] ?? ''), $allArticles);
 
     return (string) ob_get_clean();
 }
@@ -1053,25 +1053,31 @@ function pruneStaticArticlePages(array $config, array $activeSlugs): int
     return $removed;
 }
 
-function rebuildStaticSite(array $config): array
+function rebuildStaticSite(array $config, ?string $onlySlug = null): array
 {
     if (! staticPublishEnabled($config)) {
         return ['enabled' => false, 'articles' => 0];
     }
 
-    writeStaticFile($config, 'index.html', renderHomePageHtml($config));
-    writeStaticFile($config, 'llms.txt', renderLlmsText($config));
-    writeStaticFile($config, 'sitemap.txt', renderSitemapText($config));
+    // 只加载一次全部文章。onlySlug 非空时为增量重建：仅重渲染该篇静态页，
+    // 其余文章页保持不变，避免每次 publish/update/delete 都全量渲染 O(N) 个 HTML。
+    $articles = loadArticles($config);
+
+    writeStaticFile($config, 'index.html', renderHomePageHtml($config, $articles));
+    writeStaticFile($config, 'llms.txt', renderLlmsText($config, $articles));
+    writeStaticFile($config, 'sitemap.txt', renderSitemapText($config, $articles));
 
     $count = 0;
     $activeSlugs = [];
-    foreach (loadArticles($config) as $article) {
+    foreach ($articles as $article) {
         $slug = (string) ($article['slug'] ?? '');
         if ($slug === '') {
             continue;
         }
         $activeSlugs[] = $slug;
-        writeStaticFile($config, 'article/'.safeFileName($slug).'/index.html', renderArticlePageHtml($config, $slug));
+        if ($onlySlug === null || $slug === $onlySlug) {
+            writeStaticFile($config, 'article/'.safeFileName($slug).'/index.html', renderArticlePageHtml($config, $article, $articles));
+        }
         $count++;
     }
     $removed = pruneStaticArticlePages($config, $activeSlugs);
@@ -1357,23 +1363,23 @@ function apparelPageHeader(array $config, array $settings, string $title): void
     echo '</nav></div></header><main class="wrap">';
 }
 
-function renderHomePage(array $config): void
+function renderHomePage(array $config, ?array $articles = null): void
 {
     $settings = siteSettings($config);
     if (themeClass($settings) === 'target-theme-apparel') {
-        renderApparelHomePage($config, $settings);
+        renderApparelHomePage($config, $settings, $articles);
 
         return;
     }
 
     if (themeClass($settings) === 'target-theme-fashion') {
-        renderFashionHomePage($config, $settings);
+        renderFashionHomePage($config, $settings, $articles);
 
         return;
     }
 
     $siteName = (string) $settings['site_name'];
-    $articles = array_slice(loadArticles($config), 0, (int) $settings['per_page']);
+    $articles = array_slice($articles ?? loadArticles($config), 0, (int) $settings['per_page']);
     pageHeader($config, '首页');
     echo jsonLdScript([
         "@context"=>"https://schema.org",
@@ -1406,10 +1412,10 @@ function renderHomePage(array $config): void
     pageFooter($config);
 }
 
-function renderApparelHomePage(array $config, array $settings): void
+function renderApparelHomePage(array $config, array $settings, ?array $allArticles = null): void
 {
     $siteName = (string) $settings['site_name'];
-    $articles = array_slice(loadArticles($config), 0, (int) $settings['per_page']);
+    $articles = array_slice($allArticles ?? loadArticles($config), 0, (int) $settings['per_page']);
     $lead = $articles[0] ?? null;
     $headlines = array_slice($articles, 1, 3);
     $latest = $lead ? array_slice($articles, 1) : $articles;
@@ -1503,12 +1509,12 @@ function renderApparelSidebar(array $config, array $settings, array $articles): 
     echo '</div></section></aside>';
 }
 
-function renderFashionHomePage(array $config, array $settings): void
+function renderFashionHomePage(array $config, array $settings, ?array $allArticles = null): void
 {
     $siteName = (string) $settings['site_name'];
     $description = (string) $settings['site_description'];
     $subtitle = trim((string) ($settings['site_subtitle'] ?? ''));
-    $articles = array_slice(loadArticles($config), 0, (int) $settings['per_page']);
+    $articles = array_slice($allArticles ?? loadArticles($config), 0, (int) $settings['per_page']);
     $featured = array_slice($articles, 0, min(3, count($articles)));
     $latest = array_slice($articles, 0);
 
@@ -1601,6 +1607,11 @@ function renderArticlePage(array $config, string $slug): void
         return;
     }
 
+    renderArticlePageBody($config, $article, $slug);
+}
+
+function renderArticlePageBody(array $config, array $article, string $slug, ?array $allArticles = null): void
+{
     $title = (string) ($article['title'] ?? '未命名文章');
     $category = is_array($article['category'] ?? null) ? (string) ($article['category']['name'] ?? '默认分类') : '默认分类';
     $publishedAt = substr((string) ($article['published_at'] ?? $article['updated_at'] ?? ''), 0, 10);
@@ -1670,7 +1681,7 @@ function renderArticlePage(array $config, string $slug): void
     echo '</article>';
     if ($isApparel) {
         echo '</main>';
-        renderApparelSidebar($config, siteSettings($config), loadArticles($config));
+        renderApparelSidebar($config, siteSettings($config), $allArticles ?? loadArticles($config));
         echo '</div>';
     }
     pageFooter($config);
@@ -1684,7 +1695,7 @@ function textMapLine(string $value): string
     return trim(is_string($value) ? $value : '');
 }
 
-function renderLlmsText(array $config): string
+function renderLlmsText(array $config, ?array $articles = null): string
 {
     $settings = siteSettings($config);
     $siteName = textMapLine((string) $settings['site_name']);
@@ -1706,7 +1717,7 @@ function renderLlmsText(array $config): string
     $lines[] = '## Articles';
     $lines[] = '';
 
-    $articles = loadArticles($config);
+    $articles = $articles ?? loadArticles($config);
     if ($articles === []) {
         $lines[] = 'No articles have been published yet.';
     } else {
@@ -1731,10 +1742,10 @@ function renderLlmsText(array $config): string
     return rtrim(implode("\n", $lines))."\n";
 }
 
-function renderSitemapText(array $config): string
+function renderSitemapText(array $config, ?array $articles = null): string
 {
     $urls = [frontSiteUrl($config, '/')];
-    foreach (loadArticles($config) as $article) {
+    foreach ($articles ?? loadArticles($config) as $article) {
         $slug = (string) ($article['slug'] ?? '');
         if ($slug !== '') {
             $urls[] = frontSiteUrl($config, '/article/'.rawurlencode($slug));
@@ -1784,7 +1795,7 @@ function handleArticlePublish(array $config, string $method, string $path, strin
         'response' => $response,
     ], 'article_storage_not_writable');
 
-    $response['static'] = rebuildStaticSite($config);
+    $response['static'] = rebuildStaticSite($config, $slug);
 
     jsonResponse(200, $response);
 }
@@ -1823,7 +1834,7 @@ function handleArticleUpdate(array $config, string $method, string $path, string
         'response' => $response,
     ], 'article_storage_not_writable');
 
-    $response['static'] = rebuildStaticSite($config);
+    $response['static'] = rebuildStaticSite($config, $slug);
 
     jsonResponse(200, $response);
 }
@@ -1848,7 +1859,7 @@ function handleArticleDelete(array $config, string $method, string $path, string
         @unlink($file);
     }
     removeStaticArticle($config, $slug);
-    $static = rebuildStaticSite($config);
+    $static = rebuildStaticSite($config, $slug);
 
     jsonResponse(200, [
         'ok' => true,
