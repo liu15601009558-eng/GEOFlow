@@ -25,8 +25,13 @@ class DistributionRetryPolicy
             return false;
         }
 
+        // cURL 断连报 "Failed to connect"（error 7）、DNS 失败报 "Could not resolve host"（error 6），
+        // 都不含 "connection" 字样，必须单独匹配，否则硬网络错误会被当成永久失败不重试
         return str_contains($message, 'timeout')
             || str_contains($message, 'connection')
+            || str_contains($message, 'connect')
+            || str_contains($message, 'resolve host')
+            || str_contains($message, 'refused')
             || str_contains($message, '429')
             || str_contains($message, '500')
             || str_contains($message, '502')

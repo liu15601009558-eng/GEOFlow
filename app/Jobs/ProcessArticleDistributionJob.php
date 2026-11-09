@@ -15,7 +15,9 @@ class ProcessArticleDistributionJob implements ShouldQueue
 
     public int $tries = 3;
 
-    public int $timeout = 60;
+    // 须覆盖 process() 最坏耗时：auto_classify(30s) + publish(120s) + 余量。
+    // job 超时小于 HTTP 超时时，worker 会在请求进行中杀死 job，记录永远卡在 sending。
+    public int $timeout = 180;
 
     public function __construct(private readonly int $distributionId) {}
 

@@ -269,7 +269,11 @@ class JobQueueService
         $attemptCount = (int) ($runMeta['attempt_count'] ?? 0) + 1;
         $maxAttempts = max(1, (int) ($runMeta['max_attempts'] ?? 3));
         $shouldRetry = $attemptCount < $maxAttempts;
-        $nextAvailableAt = now()->addSeconds(max(1, $retryDelaySeconds));
+        // 供应商限流错误不做 60s 快重试：改 30 分钟退避，避免限流期间重试风暴烧配额
+        $rateLimited = str_contains(mb_strtolower($errorMessage, 'UTF-8'), 'rate limit')
+            || str_contains($errorMessage, '429');
+        $delaySeconds = $rateLimited ? 1800 : max(1, $retryDelaySeconds);
+        $nextAvailableAt = now()->addSeconds($delaySeconds);
 
         $newMeta = array_merge($runMeta, [
             'attempt_count' => $attemptCount,

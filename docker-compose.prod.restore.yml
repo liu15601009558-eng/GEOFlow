@@ -27,7 +27,20 @@ services:
     working_dir: /var/www/html
     env_file:
       - ./.env.prod
-    command: ["php", "artisan", "queue:work", "database", "--queue=geoflow,distribution,default", "--sleep=1", "--tries=3", "--timeout=300"]
+    command: ["php", "artisan", "queue:work", "database", "--queue=geoflow", "--sleep=1", "--tries=3", "--timeout=300", "--memory=512"]
+    volumes:
+      - ./:/var/www/html
+      - ./infra/php-queue-memory.ini:/usr/local/etc/php/conf.d/99-geoflow-memory.ini:ro
+    restart: unless-stopped
+
+  # 分发专用 worker：与 geoflow 队列解耦，避免生成失败重试时分发任务被饿死
+  queue-dist:
+    image: geoflow-app:latest
+    container_name: geo-system-queue-dist
+    working_dir: /var/www/html
+    env_file:
+      - ./.env.prod
+    command: ["php", "artisan", "queue:work", "database", "--queue=distribution,default", "--sleep=1", "--tries=3", "--timeout=300", "--memory=512"]
     volumes:
       - ./:/var/www/html
       - ./infra/php-queue-memory.ini:/usr/local/etc/php/conf.d/99-geoflow-memory.ini:ro

@@ -239,14 +239,16 @@ class DistributionHttpClient
         }
 
         $endpoint = $this->endpoint($channel, $path);
-        $response = $this->postSignedJson($secret, $endpoint, $path, $body, $event, $idempotencyKey, 30);
+        // 大站点（如 90817 4000+ 篇文章）的 Agent publish 会做静态重建，耗时可达 30-60s，
+        // 30s 会让客户端先超时断开（nginx 记 499）而服务端其实发布成功。放宽到 120s。
+        $response = $this->postSignedJson($secret, $endpoint, $path, $body, $event, $idempotencyKey, 120);
         $failedEndpoint = $endpoint;
         $failedResponse = $response;
 
         if ($response->status() === 404 && $this->canUseIndexPhpFallback($channel)) {
             $fallbackBaseUrl = $this->indexPhpBaseUrl($channel);
             $fallbackEndpoint = $this->indexPhpEndpoint($channel, $path);
-            $fallbackResponse = $this->postSignedJson($secret, $fallbackEndpoint, $path, $body, $event, $idempotencyKey, 30);
+            $fallbackResponse = $this->postSignedJson($secret, $fallbackEndpoint, $path, $body, $event, $idempotencyKey, 120);
             $failedEndpoint = $fallbackEndpoint;
             $failedResponse = $fallbackResponse;
 
