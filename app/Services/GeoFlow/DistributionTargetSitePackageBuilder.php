@@ -724,6 +724,10 @@ function keywordTags(string $keywords): array
 
 function articleImageUrl(array $article): string
 {
+    if (array_key_exists('_image_url', $article)) {
+        return safeContentUrl((string) $article['_image_url']);
+    }
+
     $heroImageUrl = safeContentUrl((string) ($article['hero_image_url'] ?? ''));
     if ($heroImageUrl !== '') {
         return $heroImageUrl;
@@ -749,7 +753,11 @@ function articleSummary(array $article, int $limit = 160): string
         return $summary;
     }
 
-    return mb_substr(trim(strip_tags((string) ($article['content'] ?? ''))), 0, $limit);
+    $plain = array_key_exists('_plain_excerpt', $article)
+        ? (string) $article['_plain_excerpt']
+        : trim(strip_tags((string) ($article['content'] ?? '')));
+
+    return mb_substr($plain, 0, $limit);
 }
 
 function renderTemplateString(string $template, array $vars): string
@@ -1059,30 +1067,62 @@ function rebuildStaticSite(array $config, ?string $onlySlug = null): array
         return ['enabled' => false, 'articles' => 0];
     }
 
-    // 只加载一次全部文章。onlySlug 非空时为增量重建：仅重渲染该篇静态页，
-    // 其余文章页保持不变，避免每次 publish/update/delete 都全量渲染 O(N) 个 HTML。
-    $articles = loadArticles($config);
+    if ($onlySlug === null) {
+        // 全量重建（站点设置变更等低频操作）：全量读取渲染，并顺手重建摘要索引。
+        $articles = loadArticles($config);
+        writeArticleIndex($config, array_map('summarizeArticle', $articles));
 
-    writeStaticFile($config, 'index.html', renderHomePageHtml($config, $articles));
-    writeStaticFile($config, 'llms.txt', renderLlmsText($config, $articles));
-    writeStaticFile($config, 'sitemap.txt', renderSitemapText($config, $articles));
+        writeStaticFile($config, 'index.html', renderHomePageHtml($config, $articles));
+        writeStaticFile($config, 'llms.txt', renderLlmsText($config, $articles));
+        writeStaticFile($config, 'sitemap.txt', renderSitemapText($config, $articles));
 
-    $count = 0;
-    $activeSlugs = [];
-    foreach ($articles as $article) {
-        $slug = (string) ($article['slug'] ?? '');
-        if ($slug === '') {
-            continue;
-        }
-        $activeSlugs[] = $slug;
-        if ($onlySlug === null || $slug === $onlySlug) {
+        $count = 0;
+        $activeSlugs = [];
+        foreach ($articles as $article) {
+            $slug = (string) ($article['slug'] ?? '');
+            if ($slug === '') {
+                continue;
+            }
+            $activeSlugs[] = $slug;
             writeStaticFile($config, 'article/'.safeFileName($slug).'/index.html', renderArticlePageHtml($config, $article, $articles));
+            $count++;
         }
-        $count++;
-    }
-    $removed = pruneStaticArticlePages($config, $activeSlugs);
+        $removed = pruneStaticArticlePages($config, $activeSlugs);
 
-    return ['enabled' => true, 'articles' => $count, 'removed' => $removed];
+        return ['enabled' => true, 'articles' => $count, 'removed' => $removed];
+    }
+
+    // 增量重建（publish/update/delete）：只读摘要索引 + 当篇 JSON，读盘 O(1)，
+    // 仅重渲染当篇静态页与首页/llms/sitemap，其余文章页保持不变。
+    // 索引与文章 JSON 由同一 worker 在同一请求内写入，增量路径直接信任索引
+    // （当篇随后被合并/移除），计数校验只用于 GET 回退路径的自愈。
+    $summaries = articleSummaries($config, false);
+
+    $article = null;
+    $file = storageDir($config).'/'.safeFileName($onlySlug).'.json';
+    if (is_file($file)) {
+        $record = json_decode((string) file_get_contents($file), true);
+        if (is_array($record) && is_array($record['article'] ?? null)) {
+            $article = $record['article'];
+        }
+    }
+
+    $list = array_values(array_filter($summaries, fn (array $s): bool => (string) ($s['slug'] ?? '') !== $onlySlug));
+    if ($article !== null) {
+        $list[] = summarizeArticle($article);
+    }
+    $list = sortArticleSummaries($list);
+
+    writeStaticFile($config, 'index.html', renderHomePageHtml($config, $list));
+    writeStaticFile($config, 'llms.txt', renderLlmsText($config, $list));
+    writeStaticFile($config, 'sitemap.txt', renderSitemapText($config, $list));
+    if ($article !== null) {
+        writeStaticFile($config, 'article/'.safeFileName($onlySlug).'/index.html', renderArticlePageHtml($config, $article, $list));
+    }
+    writeArticleIndex($config, $list);
+    $removed = pruneStaticArticlePages($config, array_map(fn (array $s): string => (string) ($s['slug'] ?? ''), $list));
+
+    return ['enabled' => true, 'articles' => count($list), 'removed' => $removed];
 }
 
 function ensureStorage(array $config): void
@@ -1259,13 +1299,90 @@ function loadArticles(array $config): array
 
 function findArticle(array $config, string $slug): ?array
 {
-    foreach (loadArticles($config) as $article) {
-        if ((string) ($article['slug'] ?? '') === $slug) {
-            return $article;
+    $file = storageDir($config).'/'.safeFileName($slug).'.json';
+    if (is_file($file)) {
+        $record = json_decode((string) file_get_contents($file), true);
+        if (is_array($record) && is_array($record['article'] ?? null)) {
+            return $record['article'];
         }
     }
 
     return null;
+}
+
+function articleIndexPath(array $config): string
+{
+    return storageRoot($config).'/articles-index.json';
+}
+
+function summarizeArticle(array $article): array
+{
+    $summary = [
+        'slug' => (string) ($article['slug'] ?? ''),
+        '_image_url' => articleImageUrl($article),
+        '_plain_excerpt' => mb_substr(trim(strip_tags((string) ($article['content'] ?? ''))), 0, 300),
+    ];
+
+    foreach (['title', 'published_at', 'updated_at', 'excerpt', 'meta_description'] as $key) {
+        $value = (string) ($article[$key] ?? '');
+        if (trim($value) !== '') {
+            $summary[$key] = $value;
+        }
+    }
+    if (is_array($article['category'] ?? null)) {
+        $summary['category'] = $article['category'];
+    }
+
+    return $summary;
+}
+
+function sortArticleSummaries(array $summaries): array
+{
+    usort($summaries, fn (array $a, array $b): int => strcmp(
+        (string) ($b['published_at'] ?? $b['updated_at'] ?? ''),
+        (string) ($a['published_at'] ?? $a['updated_at'] ?? '')
+    ));
+
+    return array_values($summaries);
+}
+
+function writeArticleIndex(array $config, array $summaries): void
+{
+    $summaries = sortArticleSummaries($summaries);
+    $json = json_encode($summaries, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if (! is_string($json) || $json === '') {
+        return;
+    }
+
+    $path = articleIndexPath($config);
+    $tmp = $path.'.tmp';
+    if (@file_put_contents($tmp, $json) !== false && @rename($tmp, $path)) {
+        return;
+    }
+    @unlink($tmp);
+}
+
+function articleSummaries(array $config, bool $verifyCount = true): array
+{
+    $path = articleIndexPath($config);
+    if (is_file($path)) {
+        $decoded = json_decode((string) @file_get_contents($path), true);
+        if (is_array($decoded)) {
+            if (! $verifyCount) {
+                return $decoded;
+            }
+            $files = glob(storageDir($config).'/*.json');
+            $count = is_array($files) ? count($files) : 0;
+            if (count($decoded) === $count) {
+                return $decoded;
+            }
+        }
+    }
+
+    $summaries = array_map('summarizeArticle', loadArticles($config));
+    writeArticleIndex($config, $summaries);
+
+    return $summaries;
 }
 
 function articleCategoryName(array $article): string
@@ -1379,7 +1496,7 @@ function renderHomePage(array $config, ?array $articles = null): void
     }
 
     $siteName = (string) $settings['site_name'];
-    $articles = array_slice($articles ?? loadArticles($config), 0, (int) $settings['per_page']);
+    $articles = array_slice($articles ?? articleSummaries($config), 0, (int) $settings['per_page']);
     pageHeader($config, '首页');
     echo jsonLdScript([
         "@context"=>"https://schema.org",
@@ -1405,7 +1522,7 @@ function renderHomePage(array $config, ?array $articles = null): void
         $articleUrl = frontSitePath($config, '/article/'.rawurlencode($slug));
         echo '<article class="card"><div class="meta"><span class="chip">'.h($category).'</span><span>'.h($publishedAt).'</span></div>';
         echo '<h2><a href="'.h($articleUrl).'">'.h($title).'</a></h2>';
-        echo '<p class="summary">'.h($summary !== '' ? $summary : mb_substr(strip_tags((string) ($article['content'] ?? '')), 0, 160)).'</p>';
+        echo '<p class="summary">'.h($summary !== '' ? $summary : mb_substr((string) ($article['_plain_excerpt'] ?? strip_tags((string) ($article['content'] ?? ''))), 0, 160)).'</p>';
         echo '<a class="read" href="'.h($articleUrl).'">阅读全文</a></article>';
     }
     echo '</section>';
@@ -1415,7 +1532,7 @@ function renderHomePage(array $config, ?array $articles = null): void
 function renderApparelHomePage(array $config, array $settings, ?array $allArticles = null): void
 {
     $siteName = (string) $settings['site_name'];
-    $articles = array_slice($allArticles ?? loadArticles($config), 0, (int) $settings['per_page']);
+    $articles = array_slice($allArticles ?? articleSummaries($config), 0, (int) $settings['per_page']);
     $lead = $articles[0] ?? null;
     $headlines = array_slice($articles, 1, 3);
     $latest = $lead ? array_slice($articles, 1) : $articles;
@@ -1514,7 +1631,7 @@ function renderFashionHomePage(array $config, array $settings, ?array $allArticl
     $siteName = (string) $settings['site_name'];
     $description = (string) $settings['site_description'];
     $subtitle = trim((string) ($settings['site_subtitle'] ?? ''));
-    $articles = array_slice($allArticles ?? loadArticles($config), 0, (int) $settings['per_page']);
+    $articles = array_slice($allArticles ?? articleSummaries($config), 0, (int) $settings['per_page']);
     $featured = array_slice($articles, 0, min(3, count($articles)));
     $latest = array_slice($articles, 0);
 
@@ -1681,7 +1798,7 @@ function renderArticlePageBody(array $config, array $article, string $slug, ?arr
     echo '</article>';
     if ($isApparel) {
         echo '</main>';
-        renderApparelSidebar($config, siteSettings($config), $allArticles ?? loadArticles($config));
+        renderApparelSidebar($config, siteSettings($config), $allArticles ?? articleSummaries($config));
         echo '</div>';
     }
     pageFooter($config);
@@ -1717,7 +1834,7 @@ function renderLlmsText(array $config, ?array $articles = null): string
     $lines[] = '## Articles';
     $lines[] = '';
 
-    $articles = $articles ?? loadArticles($config);
+    $articles = $articles ?? articleSummaries($config);
     if ($articles === []) {
         $lines[] = 'No articles have been published yet.';
     } else {
@@ -1729,7 +1846,7 @@ function renderLlmsText(array $config, ?array $articles = null): string
             $title = textMapLine((string) ($article['title'] ?? 'Untitled Article'));
             $summary = textMapLine((string) ($article['excerpt'] ?? $article['meta_description'] ?? ''));
             if ($summary === '') {
-                $summary = textMapLine(mb_substr(strip_tags((string) ($article['content'] ?? '')), 0, 180));
+                $summary = textMapLine(mb_substr((string) ($article['_plain_excerpt'] ?? strip_tags((string) ($article['content'] ?? ''))), 0, 180));
             }
             $line = '- '.($title !== '' ? $title : $slug).' - '.frontSiteUrl($config, '/article/'.rawurlencode($slug));
             if ($summary !== '') {
@@ -1745,7 +1862,7 @@ function renderLlmsText(array $config, ?array $articles = null): string
 function renderSitemapText(array $config, ?array $articles = null): string
 {
     $urls = [frontSiteUrl($config, '/')];
-    foreach ($articles ?? loadArticles($config) as $article) {
+    foreach ($articles ?? articleSummaries($config) as $article) {
         $slug = (string) ($article['slug'] ?? '');
         if ($slug !== '') {
             $urls[] = frontSiteUrl($config, '/article/'.rawurlencode($slug));
@@ -1764,6 +1881,19 @@ function handleHealth(array $config, string $method, string $path, string $body)
         'event' => $verified['event'],
         'time' => gmdate('c'),
     ]);
+}
+
+function handleIndexRebuild(array $config, string $method, string $path, string $body): void
+{
+    $verified = verifySignedRequest($config, $method, $path, $body);
+    if ($verified['event'] !== 'index.rebuild') {
+        jsonResponse(422, ['ok' => false, 'error' => 'unsupported_event']);
+    }
+
+    $summaries = array_map('summarizeArticle', loadArticles($config));
+    writeArticleIndex($config, $summaries);
+
+    jsonResponse(200, ['ok' => true, 'reindexed' => count($summaries)]);
 }
 
 function handleArticlePublish(array $config, string $method, string $path, string $body): void
@@ -1918,6 +2048,9 @@ if ($method === 'POST' && preg_match('#^/geoflow-agent/v1/articles/([^/]+)/delet
 }
 if ($method === 'POST' && $path === '/geoflow-agent/v1/site-settings') {
     handleSiteSettingsUpdate($config, $method, $path, $body);
+}
+if ($method === 'POST' && $path === '/geoflow-agent/v1/index/rebuild') {
+    handleIndexRebuild($config, $method, $path, $body);
 }
 if ($method === 'GET' && $path === '/') {
     renderHomePage($config);
