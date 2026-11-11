@@ -19,18 +19,21 @@ Artisan::command('inspire', function () {
 
 /**
  * GeoFlow 任务调度：每分钟扫描一次可执行任务并入队（对齐 bak cron 逻辑）。
+ * 保留子进程输出并记录失败，便于定位历史 exit 255 问题。
  */
-Schedule::command('geoflow:schedule-tasks')->everyMinute();
+Schedule::command('geoflow:schedule-tasks')
+    ->everyMinute()
+    ->withoutOverlapping(5)
+    ->appendOutputTo(storage_path('logs/schedule-tasks.log'))
+    ->onFailure(fn () => \Illuminate\Support\Facades\Log::error('geoflow.schedule_tasks_failed'));
 
 /**
- * 文章收录追踪：每天凌晨 3 点检查所有已发布文章的收录状态。
+ * 文章收录追踪：功能尚未实现（verifyIndexStatus 仍为占位实现），
+ * 且依赖的 TargetSite 模型曾缺失，先停用调度避免每小时报错。
+ * 待接入真实百度收录 API 后恢复。
  */
-Schedule::command('geoflow:track-articles --report')->dailyAt('03:00');
-
-/**
- * 文章收录追踪：每小时检查新发布文章（发布后 24 小时内）。
- */
-Schedule::command('geoflow:track-articles --engine=baidu')->hourly();
+// Schedule::command('geoflow:track-articles --report')->dailyAt('03:00');
+// Schedule::command('geoflow:track-articles --engine=baidu')->hourly();
 
 /**
  * 文章质量检查：每天凌晨 4 点检查所有已发布文章的质量。

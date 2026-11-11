@@ -64,6 +64,10 @@ return [
     'semantic_chunking_max_chars' => max(1, (int) env('GEOFLOW_SEMANTIC_CHUNKING_MAX_CHARS', 20000)),
     // Embedding 文档向量化单次请求切片数；部分供应商限制 batch 较小，默认保守拆分。
     'embedding_batch_size' => max(1, min(64, (int) env('GEOFLOW_EMBEDDING_BATCH_SIZE', 1))),
+    // 文章发布后是否自动加入收录追踪队列；收录查询尚未实现，默认关闭以避免写入无效追踪数据。
+    'article_tracking_enabled' => filter_var(env('GEOFLOW_ARTICLE_TRACKING_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
+    // 智能模型切换（smart_failover）一轮生成的总耗时预算（秒），须小于队列硬超时。
+    'model_failover_deadline_seconds' => max(30, (int) env('GEOFLOW_MODEL_FAILOVER_DEADLINE_SECONDS', 240)),
 
     // 本地上传根目录（绝对路径）
     'upload_path' => env('GEOFLOW_UPLOAD_PATH', public_path('assets/images')),

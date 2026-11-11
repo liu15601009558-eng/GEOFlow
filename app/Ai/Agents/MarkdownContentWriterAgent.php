@@ -3,6 +3,7 @@
 namespace App\Ai\Agents;
 
 use App\Jobs\ProcessGeoFlowTaskJob;
+use Laravel\Ai\Attributes\MaxTokens;
 use Laravel\Ai\Attributes\Timeout;
 use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\Conversational;
@@ -15,6 +16,7 @@ use Laravel\Ai\Promptable;
  * 须小于 {@see ProcessGeoFlowTaskJob::$timeout}，避免队列作业尚未结束而 HTTP 已先超时。
  */
 #[Timeout(240)]
+#[MaxTokens(6000)]
 class MarkdownContentWriterAgent implements Agent, Conversational, HasTools
 {
     use Promptable;

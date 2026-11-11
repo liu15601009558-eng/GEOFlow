@@ -100,6 +100,11 @@ class Article extends Model
         parent::boot();
 
         static::updated(function (Article $article) {
+            // 收录查询尚未实现（verifyIndexStatus 为占位），默认不投递追踪任务，避免产生无效数据与失败任务。
+            if (! config('geoflow.article_tracking_enabled', false)) {
+                return;
+            }
+
             // 文章刚发布时，自动加入追踪队列
             if ($article->isDirty('status') && $article->status === 'published' && $article->getOriginal('status') !== 'published') {
                 \App\Jobs\TrackArticleIndexJob::dispatch($article->id);

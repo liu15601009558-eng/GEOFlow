@@ -310,7 +310,21 @@ class WorkerExecutionService
         $attempts = [];
         $lastMessage = '';
 
+        // 故障转移总耗时上限：多候选逐个重试时，若单个模型超时（最长 240s），
+        // 串行重试可能远超队列硬超时（300s）而被强杀，留下卡在 running 的执行记录。
+        // 这里设置一个总预算，超时后主动中止并抛出可读错误，保证任务能正常收尾。
+        $failoverDeadline = max(30, (int) config('geoflow.model_failover_deadline_seconds', 240));
+        $deadlineAt = microtime(true) + $failoverDeadline;
+        $deadlineHit = false;
+
         foreach ($this->resolveAiModelCandidates($task) as $candidate) {
+            if (microtime(true) >= $deadlineAt) {
+                $deadlineHit = true;
+                $lastMessage = '模型故障转移总耗时超过 '.$failoverDeadline.' 秒上限，已中止本轮尝试';
+
+                break;
+            }
+
             $unavailableReason = $this->getAiModelUnavailableReason($candidate);
             if ($unavailableReason !== null) {
                 $attempts[] = $this->buildModelAttempt($candidate, 'skipped', $unavailableReason);
@@ -323,7 +337,9 @@ class WorkerExecutionService
             }
 
             try {
-                $content = $this->generateContent($candidate, $contentPrompt);
+                // 单次调用的超时取“剩余预算”，避免最后一个候选超出总时限。
+                $remainingSeconds = (int) ceil($deadlineAt - microtime(true));
+                $content = $this->generateContent($candidate, $contentPrompt, max(20, $remainingSeconds));
                 $attempts[] = $this->buildModelAttempt($candidate, 'success', null);
 
                 // round_robin 轮转：更新模型组的 last_used_model_id
@@ -350,6 +366,10 @@ class WorkerExecutionService
 
         if ($mode === 'smart_failover' && $attempts !== []) {
             throw new RuntimeException($this->buildFailoverErrorMessage($attempts, $lastMessage));
+        }
+
+        if ($deadlineHit) {
+            throw new RuntimeException($lastMessage);
         }
 
         throw new RuntimeException('AI模型不可用或已达每日限制');
@@ -434,6 +454,26 @@ class WorkerExecutionService
                 foreach ($memberModelIds as $id) {
                     if (isset($modelMap[(int) $id])) {
                         $sorted[] = $modelMap[(int) $id];
+                    }
+                }
+
+                // 跨供应商兜底：组内模型全部失败（如账号级限流）时，
+                // 追加任务配置的 fallback_model_id，避免单一供应商限流导致整轮生成失败。
+                $fallbackId = (int) ($task->fallback_model_id ?? 0);
+                $sortedIds = array_map(static fn (AiModel $model): int => (int) $model->id, $sorted);
+                if ($fallbackId > 0 && ! in_array($fallbackId, $sortedIds, true)) {
+                    $fallbackModel = AiModel::query()
+                        ->whereKey($fallbackId)
+                        ->where('status', 'active')
+                        ->where(function ($query) {
+                            $query->whereNull('model_type')
+                                ->orWhere('model_type', '')
+                                ->orWhere('model_type', 'chat');
+                        })
+                        ->first();
+
+                    if ($fallbackModel) {
+                        $sorted[] = $fallbackModel;
                     }
                 }
 
@@ -889,7 +929,7 @@ class WorkerExecutionService
     /**
      * 调用任务配置模型生成正文。
      */
-    private function generateContent(AiModel $aiModel, string $contentPrompt): string
+    private function generateContent(AiModel $aiModel, string $contentPrompt, ?int $timeoutSeconds = null): string
     {
         $providerUrl = OpenAiRuntimeProvider::resolveChatBaseUrl((string) ($aiModel->api_url ?? ''));
         if ($providerUrl === '') {
@@ -906,7 +946,7 @@ class WorkerExecutionService
         $agent = new MarkdownContentWriterAgent;
 
         try {
-            $response = $agent->prompt($contentPrompt, [], $providerName, (string) ($aiModel->model_id ?? ''));
+            $response = $agent->prompt($contentPrompt, [], $providerName, (string) ($aiModel->model_id ?? ''), $timeoutSeconds);
         } catch (Throwable $exception) {
             throw new RuntimeException('AI 生成失败: '.OpenAiRuntimeProvider::normalizeApiException($exception, $providerUrl), 0, $exception);
         }
