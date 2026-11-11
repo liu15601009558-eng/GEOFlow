@@ -4,9 +4,14 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Category;
+use App\Models\Task;
+use App\Services\GeoFlow\CategorySlugRegistry;
+use App\Services\Site\UrlChangeGuard;
 use App\Support\AdminWeb;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 
 /**
@@ -18,6 +23,8 @@ use Illuminate\View\View;
  */
 class CategoryController extends Controller
 {
+    public function __construct(private readonly CategorySlugRegistry $slugs, private readonly UrlChangeGuard $urlGuard) {}
+
     /**
      * 栏目列表页。
      */
@@ -63,18 +70,15 @@ class CategoryController extends Controller
         $name = trim((string) $payload['name']);
         $description = trim((string) ($payload['description'] ?? ''));
         $sortOrder = (int) ($payload['sort_order'] ?? 0);
-        $slug = $this->buildCategorySlug($name, (string) ($payload['slug'] ?? ''), 0);
 
         if (Category::query()->where('name', $name)->exists()) {
             return back()->withInput()->withErrors(__('admin.categories.error.name_exists'));
         }
 
-        Category::query()->create([
-            'name' => $name,
-            'slug' => $slug,
-            'description' => $description,
-            'sort_order' => $sortOrder,
-        ]);
+        DB::transaction(function () use ($name, $payload, $description, $sortOrder): void {
+            $slug = $this->buildCategorySlug($name, (string) ($payload['slug'] ?? ''), 0);
+            Category::query()->create(['name' => $name, 'slug' => $slug, 'description' => $description, 'sort_order' => $sortOrder]);
+        }, 3);
 
         return redirect()->route('admin.categories.index')->with('message', __('admin.categories.message.add_success'));
     }
@@ -120,7 +124,13 @@ class CategoryController extends Controller
         $name = trim((string) $payload['name']);
         $description = trim((string) ($payload['description'] ?? ''));
         $sortOrder = (int) ($payload['sort_order'] ?? 0);
-        $slug = $this->buildCategorySlug($name, (string) ($payload['slug'] ?? ''), $categoryId);
+        $slug = (string) $category->slug;
+        if (array_key_exists('slug', $payload) && (string) $payload['slug'] !== $slug) {
+            if (trim((string) $payload['slug']) === '') {
+                throw ValidationException::withMessages(['slug' => __('url_change.errors.category_slug_invalid')]);
+            }
+            $this->urlGuard->category($category, (string) $payload['slug'], $request->user('admin'));
+        }
 
         $duplicateQuery = Category::query()->where('name', $name)->where('id', '!=', $categoryId);
         if ($duplicateQuery->exists()) {
@@ -129,7 +139,6 @@ class CategoryController extends Controller
 
         $category->update([
             'name' => $name,
-            'slug' => $slug,
             'description' => $description,
             'sort_order' => $sortOrder,
         ]);
@@ -142,13 +151,27 @@ class CategoryController extends Controller
      */
     public function destroy(int $categoryId): RedirectResponse
     {
-        $category = Category::query()->withCount('articles')->whereKey($categoryId)->firstOrFail();
+        $category = Category::query()
+            ->withCount(['articlesIncludingTrashed as all_articles_count'])
+            ->whereKey($categoryId)
+            ->firstOrFail();
 
-        if ((int) ($category->articles_count ?? 0) > 0) {
-            return back()->withErrors(__('admin.categories.error.delete_blocked', ['count' => (int) $category->articles_count]));
+        if ((int) ($category->all_articles_count ?? 0) > 0) {
+            return back()->withErrors(__('admin.categories.error.delete_blocked', ['count' => (int) $category->all_articles_count]));
+        }
+        $taskCount = Task::withTrashed()->where('fixed_category_id', $categoryId)->count();
+        if ($taskCount > 0) {
+            return back()->withErrors(__('admin.categories.error.delete_tasks', ['count' => $taskCount]));
         }
 
-        Category::query()->whereKey($categoryId)->delete();
+        DB::transaction(function () use ($categoryId): void {
+            $locked = Category::query()->whereKey($categoryId)->lockForUpdate()->firstOrFail();
+            if ($locked->articlesIncludingTrashed()->exists() || Task::withTrashed()->where('fixed_category_id', $categoryId)->exists()) {
+                throw ValidationException::withMessages(['category' => __('admin.categories.error.delete_blocked', ['count' => $locked->articlesIncludingTrashed()->count()])]);
+            }
+            $this->slugs->rememberDeleted($locked);
+            $locked->delete();
+        }, 3);
 
         return redirect()->route('admin.categories.index')->with('message', __('admin.categories.message.delete_success'));
     }
@@ -156,25 +179,33 @@ class CategoryController extends Controller
     /**
      * 读取分类列表并附带文章数量。
      *
-     * @return array<int, array{id:int,name:string,slug:string,description:string,sort_order:int,article_count:int,created_at:?string}>
+     * @return array<int, array{id:int,name:string,slug:string,description:string,sort_order:int,article_count:int,active_article_count:int,trashed_article_count:int,created_at:?string}>
      */
     private function loadCategories(): array
     {
         $query = Category::query()
             ->select(['id', 'name', 'slug', 'description', 'sort_order', 'created_at'])
-            ->withCount('articles')
+            ->withCount([
+                'articles',
+                'articlesIncludingTrashed as all_articles_count',
+            ])
             ->orderBy('sort_order')
             ->orderBy('name');
 
         return $query->get()
             ->map(static function (Category $category): array {
+                $activeArticleCount = (int) ($category->articles_count ?? 0);
+                $allArticleCount = (int) ($category->all_articles_count ?? $activeArticleCount);
+
                 return [
                     'id' => (int) $category->id,
                     'name' => (string) $category->name,
                     'slug' => (string) ($category->slug ?? ''),
                     'description' => (string) ($category->description ?? ''),
                     'sort_order' => (int) ($category->sort_order ?? 0),
-                    'article_count' => (int) ($category->articles_count ?? 0),
+                    'article_count' => $allArticleCount,
+                    'active_article_count' => $activeArticleCount,
+                    'trashed_article_count' => max(0, $allArticleCount - $activeArticleCount),
                     'created_at' => $category->created_at?->format('Y-m-d H:i:s'),
                 ];
             })
@@ -186,28 +217,14 @@ class CategoryController extends Controller
      */
     private function buildCategorySlug(string $name, string $rawSlug = '', int $excludeId = 0): string
     {
-        $source = trim($rawSlug) !== '' ? trim($rawSlug) : trim($name);
-        $slug = mb_strtolower($source, 'UTF-8');
-        $slug = preg_replace('/[^a-z0-9]+/i', '-', $slug) ?: '';
-        $slug = trim((string) $slug, '-');
-
-        if ($slug === '') {
-            $slug = 'cat-'.substr(md5($name), 0, 8);
+        $registry = app(CategorySlugRegistry::class);
+        if (trim($rawSlug) === '') {
+            return $registry->generate($name, $excludeId > 0 ? $excludeId : null);
         }
+        $slug = $registry->normalize($rawSlug);
+        $registry->assertAvailable($slug, $excludeId > 0 ? $excludeId : null);
 
-        $baseSlug = $slug;
-        $counter = 2;
-        while (true) {
-            $existsQuery = Category::query()->where('slug', $slug);
-            if ($excludeId > 0) {
-                $existsQuery->where('id', '!=', $excludeId);
-            }
-            if (! $existsQuery->exists()) {
-                return $slug;
-            }
-            $slug = $baseSlug.'-'.$counter;
-            $counter++;
-        }
+        return $slug;
     }
 
     /**

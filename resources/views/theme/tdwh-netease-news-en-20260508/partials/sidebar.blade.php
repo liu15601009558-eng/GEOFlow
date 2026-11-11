@@ -1,6 +1,6 @@
 @php
     $sidebarHotArticles = collect($hotArticles ?? [])->take(6);
-    $latestArticles = method_exists($articles ?? null, 'getCollection')
+    $latestArticles = is_object($articles ?? null) && method_exists($articles, 'getCollection')
         ? $articles->getCollection()->take(6)
         : collect($articles ?? [])->take(6);
     $sidebarArticles = $sidebarHotArticles->isNotEmpty() ? $sidebarHotArticles : $latestArticles;
@@ -24,7 +24,7 @@
         </div>
         <div class="ne-hot-list">
             @forelse($sidebarArticles as $hotArticle)
-                <a href="{{ route('site.article', $hotArticle->slug) }}" class="ne-hot-item">
+                <a href="{{ $siteUrls->article($hotArticle) }}" class="ne-hot-item">
                     <span class="ne-hot-index">{{ $loop->iteration }}</span>
                     <span>{{ $hotArticle->title }}</span>
                 </a>

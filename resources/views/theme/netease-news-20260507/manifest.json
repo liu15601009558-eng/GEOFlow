@@ -1,8 +1,8 @@
 {
   "id": "netease-news-20260507",
-  "name": "NetEase News Inspired",
+  "name": "网易新闻风格",
   "version": "1.0.0",
-  "description": "A NetEase-inspired GEOFlow frontend theme mapping portal home, health-style category lists, and article detail pages while preserving GEOFlow data contracts.",
+  "description": "参考网易新闻的 GEOFlow 前端主题，覆盖门户首页、健康式分类列表与文章详情页，保留 GEOFlow 数据结构。",
   "templates": [
     "layout",
     "home",
@@ -23,6 +23,30 @@
     "/",
     "/category/{slug}",
     "/article/{slug}",
-    "/archive"
-  ]
+    "/about"
+  ],
+    "topic": {
+        "contract": 1,
+        "layouts": [
+            {
+                "id": "default",
+                "name": "标准聚合",
+                "view": "site.topics.templates.default"
+            },
+            {
+                "id": "guide",
+                "name": "阅读指南",
+                "view": "site.topics.templates.guide"
+            },
+            {
+                "id": "roundup",
+                "name": "资讯盘点",
+                "view": "site.topics.templates.roundup"
+            }
+        ],
+        "homepage_module": {
+            "view": "site.partials.topic-home",
+            "enabled": true
+        }
+    }
 }

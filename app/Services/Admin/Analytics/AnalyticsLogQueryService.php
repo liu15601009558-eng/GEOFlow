@@ -2,6 +2,9 @@
 
 namespace App\Services\Admin\Analytics;
 
+use App\Models\Article;
+use App\Services\Site\SiteUrlGenerator;
+use App\Support\Analytics\TrafficClassifier;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -9,157 +12,176 @@ use Illuminate\Support\Facades\Schema;
 
 class AnalyticsLogQueryService
 {
-    private const AI_BOT_PATTERNS = [
-        'chatgpt',
-        'gptbot',
-        'openai',
-        'claudebot',
-        'anthropic',
-        'perplexity',
-        'ccbot',
-        'google-extended',
-    ];
-
-    private const SEARCH_BOT_PATTERNS = [
-        'googlebot',
-        'bingbot',
-        'baiduspider',
-        'bytespider',
-        'yandexbot',
-        'duckduckbot',
-        'sogou',
-        'slurp',
-    ];
-
-    private const GENERIC_BOT_PATTERNS = [
-        'bot',
-        'spider',
-        'crawler',
-    ];
+    public function __construct(private readonly SiteUrlGenerator $siteUrls) {}
 
     /**
      * @return array<string, mixed>
      */
-    public function summary(AnalyticsFilter $filter): array
+    public function summary(AnalyticsLogFilter $logFilter, AnalyticsFilter $contentFilter): array
     {
-        if (! in_array($filter->logSource, ['all', 'local'], true) || ! Schema::hasTable('view_logs')) {
-            return $this->emptySummary();
+        if (! Schema::hasTable('view_logs')) {
+            return $this->emptySummary($logFilter);
         }
 
-        $base = $this->baseLocalQuery($filter);
-        $this->applyTrafficFilter($base, $filter->trafficType);
-
-        $pv = (int) (clone $base)->count();
+        $metrics = $this->metrics($logFilter, $contentFilter);
+        $topArticles = $this->topArticles($logFilter, $contentFilter);
 
         return [
-            'has_data' => $pv > 0,
+            'has_data' => $metrics['pv'] > 0,
             'kpis' => [
-                'pv' => $pv,
-                'unique_ip' => (int) (clone $base)->where('view_logs.ip_address', '!=', '')->distinct()->count('view_logs.ip_address'),
-                'ai_bot_pv' => (int) $this->withTrafficType(clone $base, 'ai_bot')->count(),
-                'errors' => $this->errorCount(clone $base),
+                'pv' => $metrics['pv'],
+                'unique_ip' => $metrics['unique_ip'],
+                'ai_bot_pv' => $metrics['ai_bot_pv'],
+                'errors' => $metrics['errors'],
             ],
-            'traffic_trend' => $this->trafficTrend($filter),
-            'bot_breakdown' => $this->botBreakdown($filter),
-            'top_paths' => $this->topPaths($filter),
-            'top_articles' => $this->topArticles($filter),
+            'excluded_source_rows' => $this->excludedSourceRows($logFilter, $contentFilter),
+            'traffic_trend' => $this->trafficTrend($logFilter, $contentFilter),
+            'bot_breakdown' => $this->botBreakdown($metrics),
+            'top_paths' => $this->topPaths($logFilter, $contentFilter, $topArticles),
+            'top_articles' => $topArticles,
         ];
     }
 
     /**
      * @return array<string, mixed>
      */
-    private function emptySummary(): array
+    private function emptySummary(AnalyticsLogFilter $logFilter): array
     {
+        $metrics = [
+            'pv' => 0,
+            'unique_ip' => 0,
+            'ai_bot_pv' => 0,
+            'errors' => 0,
+            TrafficClassifier::HUMAN => 0,
+            TrafficClassifier::SEARCH_BOT => 0,
+            TrafficClassifier::AI_BOT => 0,
+            TrafficClassifier::OTHER_BOT => 0,
+            TrafficClassifier::UNKNOWN => 0,
+        ];
+
         return [
             'has_data' => false,
-            'kpis' => [
-                'pv' => 0,
-                'unique_ip' => 0,
-                'ai_bot_pv' => 0,
-                'errors' => 0,
-            ],
-            'traffic_trend' => [],
-            'bot_breakdown' => [],
+            'kpis' => array_intersect_key($metrics, array_flip(['pv', 'unique_ip', 'ai_bot_pv', 'errors'])),
+            'excluded_source_rows' => 0,
+            'traffic_trend' => array_map(fn (Carbon $day): array => $this->emptyTrendDay($day), $this->days($logFilter)),
+            'bot_breakdown' => $this->botBreakdown($metrics),
             'top_paths' => [],
             'top_articles' => [],
         ];
     }
 
-    private function baseLocalQuery(AnalyticsFilter $filter): Builder
+    /**
+     * @return array{pv: int, unique_ip: int, ai_bot_pv: int, errors: int, human: int, search_bot: int, ai_bot: int, other_bot: int, unknown: int}
+     */
+    private function metrics(AnalyticsLogFilter $logFilter, AnalyticsFilter $contentFilter): array
     {
-        $query = DB::table('view_logs')
-            ->leftJoin('articles as a', 'view_logs.article_id', '=', 'a.id')
-            ->whereBetween('view_logs.created_at', [$filter->start(), $filter->end()]);
+        $query = DB::query()->fromSub($this->classifiedQuery($logFilter, $contentFilter), 'classified');
+        $this->applySelectedTraffic($query, $logFilter);
 
-        if ($filter->articleId !== null) {
-            $query->where('view_logs.article_id', $filter->articleId);
-        }
-        if ($filter->taskId !== null) {
-            $query->where('a.task_id', $filter->taskId);
-        }
-        if ($filter->categoryId !== null) {
-            $query->where('a.category_id', $filter->categoryId);
-        }
+        $row = $query
+            ->selectRaw('COUNT(*) AS pv')
+            ->selectRaw("COUNT(DISTINCT NULLIF(TRIM(ip_address), '')) AS unique_ip")
+            ->selectRaw('SUM(CASE WHEN traffic_type = ? THEN 1 ELSE 0 END) AS ai_bot_pv', [TrafficClassifier::AI_BOT])
+            ->selectRaw('SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS errors')
+            ->selectRaw('SUM(CASE WHEN traffic_type = ? THEN 1 ELSE 0 END) AS human', [TrafficClassifier::HUMAN])
+            ->selectRaw('SUM(CASE WHEN traffic_type = ? THEN 1 ELSE 0 END) AS search_bot', [TrafficClassifier::SEARCH_BOT])
+            ->selectRaw('SUM(CASE WHEN traffic_type = ? THEN 1 ELSE 0 END) AS ai_bot', [TrafficClassifier::AI_BOT])
+            ->selectRaw('SUM(CASE WHEN traffic_type = ? THEN 1 ELSE 0 END) AS other_bot', [TrafficClassifier::OTHER_BOT])
+            ->selectRaw('SUM(CASE WHEN traffic_type = ? THEN 1 ELSE 0 END) AS unknown', [TrafficClassifier::UNKNOWN])
+            ->first();
 
-        return $query;
+        return [
+            'pv' => (int) ($row->pv ?? 0),
+            'unique_ip' => (int) ($row->unique_ip ?? 0),
+            'ai_bot_pv' => (int) ($row->ai_bot_pv ?? 0),
+            'errors' => (int) ($row->errors ?? 0),
+            TrafficClassifier::HUMAN => (int) ($row->human ?? 0),
+            TrafficClassifier::SEARCH_BOT => (int) ($row->search_bot ?? 0),
+            TrafficClassifier::AI_BOT => (int) ($row->ai_bot ?? 0),
+            TrafficClassifier::OTHER_BOT => (int) ($row->other_bot ?? 0),
+            TrafficClassifier::UNKNOWN => (int) ($row->unknown ?? 0),
+        ];
     }
 
     /**
-     * @return list<array{date: string, pv: int, ai_bot_pv: int}>
+     * @return list<array{date: string, pv: int, unique_ip: int, ai_bot_pv: int, errors: int}>
      */
-    private function trafficTrend(AnalyticsFilter $filter): array
+    private function trafficTrend(AnalyticsLogFilter $logFilter, AnalyticsFilter $contentFilter): array
     {
-        return array_map(function (Carbon $day) use ($filter): array {
-            $query = $this->baseLocalQuery($filter)
-                ->whereBetween('view_logs.created_at', [$day->copy()->startOfDay(), $day->copy()->endOfDay()]);
-            $this->applyTrafficFilter($query, $filter->trafficType);
+        $query = DB::query()->fromSub($this->classifiedQuery($logFilter, $contentFilter), 'classified');
+        $this->applySelectedTraffic($query, $logFilter);
+
+        $rows = $query
+            ->selectRaw('DATE(logged_at) AS trend_date')
+            ->selectRaw('COUNT(*) AS pv')
+            ->selectRaw("COUNT(DISTINCT NULLIF(TRIM(ip_address), '')) AS unique_ip")
+            ->selectRaw('SUM(CASE WHEN traffic_type = ? THEN 1 ELSE 0 END) AS ai_bot_pv', [TrafficClassifier::AI_BOT])
+            ->selectRaw('SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS errors')
+            ->groupByRaw('DATE(logged_at)')
+            ->orderBy('trend_date')
+            ->get()
+            ->keyBy(fn (object $row): string => Carbon::parse((string) $row->trend_date)->toDateString());
+
+        return array_map(function (Carbon $day) use ($rows): array {
+            $date = $day->toDateString();
+            $row = $rows->get($date);
+            if ($row === null) {
+                return $this->emptyTrendDay($day);
+            }
 
             return [
-                'date' => $day->toDateString(),
-                'pv' => (int) (clone $query)->count(),
-                'ai_bot_pv' => (int) $this->withTrafficType(clone $query, 'ai_bot')->count(),
+                'date' => $date,
+                'pv' => (int) $row->pv,
+                'unique_ip' => (int) $row->unique_ip,
+                'ai_bot_pv' => (int) $row->ai_bot_pv,
+                'errors' => (int) $row->errors,
             ];
-        }, $this->days($filter));
+        }, $this->days($logFilter));
     }
 
     /**
+     * @param  array<string, int>  $metrics
      * @return list<array{key: string, label: string, count: int}>
      */
-    private function botBreakdown(AnalyticsFilter $filter): array
+    private function botBreakdown(array $metrics): array
     {
-        $base = $this->baseLocalQuery($filter);
-        if ($filter->trafficType !== 'all') {
-            $this->applyTrafficFilter($base, $filter->trafficType);
-        }
-
         return array_map(fn (string $type): array => [
             'key' => $type,
             'label' => __('admin.analytics.logs_bot.'.$type),
-            'count' => (int) $this->withTrafficType(clone $base, $type)->count(),
-        ], ['human', 'search_bot', 'ai_bot', 'other_bot', 'unknown']);
+            'count' => (int) ($metrics[$type] ?? 0),
+        ], [
+            TrafficClassifier::HUMAN,
+            TrafficClassifier::SEARCH_BOT,
+            TrafficClassifier::AI_BOT,
+            TrafficClassifier::OTHER_BOT,
+            TrafficClassifier::UNKNOWN,
+        ]);
     }
 
     /**
      * @return list<array{article_id: int, title: string, slug: string, views: int, unique_ip: int}>
      */
-    private function topArticles(AnalyticsFilter $filter): array
+    private function topArticles(AnalyticsLogFilter $logFilter, AnalyticsFilter $contentFilter): array
     {
-        $query = $this->baseLocalQuery($filter)
-            ->whereNotNull('view_logs.article_id')
-            ->select('view_logs.article_id', 'a.title', 'a.slug')
-            ->selectRaw('COUNT(*) as views')
-            ->selectRaw('COUNT(DISTINCT view_logs.ip_address) as unique_ip')
-            ->groupBy('view_logs.article_id', 'a.title', 'a.slug')
-            ->orderByDesc('views')
-            ->limit(8);
-        $this->applyTrafficFilter($query, $filter->trafficType);
+        $query = DB::query()
+            ->fromSub($this->classifiedQuery($logFilter, $contentFilter), 'classified')
+            ->whereNotNull('resolved_article_id')
+            ->whereNull('article_deleted_at');
+        $this->applySelectedTraffic($query, $logFilter);
 
-        return $query->get()
-            ->map(fn ($row): array => [
+        return $query
+            ->select('article_id', 'article_title', 'article_slug')
+            ->selectRaw('COUNT(*) AS views')
+            ->selectRaw("COUNT(DISTINCT NULLIF(TRIM(ip_address), '')) AS unique_ip")
+            ->groupBy('article_id', 'article_title', 'article_slug')
+            ->orderByDesc('views')
+            ->orderBy('article_id')
+            ->limit(8)
+            ->get()
+            ->map(fn (object $row): array => [
                 'article_id' => (int) $row->article_id,
-                'title' => (string) ($row->title ?: '#'.$row->article_id),
-                'slug' => (string) ($row->slug ?? ''),
+                'title' => (string) ($row->article_title ?: '#'.$row->article_id),
+                'slug' => (string) ($row->article_slug ?? ''),
                 'views' => (int) $row->views,
                 'unique_ip' => (int) $row->unique_ip,
             ])
@@ -167,118 +189,175 @@ class AnalyticsLogQueryService
     }
 
     /**
+     * @param  list<array{article_id: int, title: string, slug: string, views: int, unique_ip: int}>  $topArticles
      * @return list<array{path: string, views: int, unique_ip: int}>
      */
-    private function topPaths(AnalyticsFilter $filter): array
+    private function topPaths(AnalyticsLogFilter $logFilter, AnalyticsFilter $contentFilter, array $topArticles): array
     {
-        if (Schema::hasColumn('view_logs', 'path')) {
-            $query = $this->baseLocalQuery($filter)
-                ->whereRaw("TRIM(COALESCE(view_logs.path, '')) != ''")
-                ->select('view_logs.path')
-                ->selectRaw('COUNT(*) as views')
-                ->selectRaw('COUNT(DISTINCT view_logs.ip_address) as unique_ip')
-                ->groupBy('view_logs.path')
-                ->orderByDesc('views')
-                ->limit(8);
-            $this->applyTrafficFilter($query, $filter->trafficType);
+        $query = DB::query()
+            ->fromSub($this->classifiedQuery($logFilter, $contentFilter), 'classified')
+            ->whereRaw("TRIM(COALESCE(path, '')) != ''");
+        $this->applySelectedTraffic($query, $logFilter);
 
-            $paths = $query->get()
-                ->map(fn ($row): array => [
-                    'path' => (string) $row->path,
-                    'views' => (int) $row->views,
-                    'unique_ip' => (int) $row->unique_ip,
-                ])
-                ->all();
+        $paths = $query
+            ->select('path')
+            ->selectRaw('COUNT(*) AS views')
+            ->selectRaw("COUNT(DISTINCT NULLIF(TRIM(ip_address), '')) AS unique_ip")
+            ->groupBy('path')
+            ->orderByDesc('views')
+            ->orderBy('path')
+            ->limit(8)
+            ->get()
+            ->map(fn (object $row): array => [
+                'path' => (string) $row->path,
+                'views' => (int) $row->views,
+                'unique_ip' => (int) $row->unique_ip,
+            ])
+            ->all();
 
-            if ($paths !== []) {
-                return $paths;
+        if ($paths !== []) {
+            return $paths;
+        }
+
+        $articles = Article::query()
+            ->with('category')
+            ->whereKey(array_column($topArticles, 'article_id'))
+            ->get()
+            ->keyBy('id');
+
+        return array_map(function (array $summary) use ($articles): array {
+            $article = $articles->get($summary['article_id']);
+
+            return [
+                'path' => $article instanceof Article
+                    ? (string) parse_url($this->siteUrls->article($article), PHP_URL_PATH)
+                    : (string) parse_url($this->siteUrls->article($summary['slug'] !== '' ? $summary['slug'] : (string) $summary['article_id']), PHP_URL_PATH),
+                'views' => $summary['views'],
+                'unique_ip' => $summary['unique_ip'],
+            ];
+        }, $topArticles);
+    }
+
+    private function excludedSourceRows(AnalyticsLogFilter $logFilter, AnalyticsFilter $contentFilter): int
+    {
+        return (int) $this->baseQuery($logFilter, $contentFilter, false)
+            ->where(function (Builder $query): void {
+                $query
+                    ->whereNull('view_logs.source')
+                    ->orWhereNotIn('view_logs.source', AnalyticsLogFilter::supportedSources());
+            })
+            ->count();
+    }
+
+    private function classifiedQuery(AnalyticsLogFilter $logFilter, AnalyticsFilter $contentFilter): Builder
+    {
+        [$classificationSql, $bindings] = $this->classificationCase();
+
+        return $this->baseQuery($logFilter, $contentFilter)
+            ->select([
+                'view_logs.created_at as logged_at',
+                'view_logs.ip_address',
+                'view_logs.status_code',
+                'view_logs.path',
+                'view_logs.article_id',
+                'a.id as resolved_article_id',
+                'a.title as article_title',
+                'a.slug as article_slug',
+                'a.deleted_at as article_deleted_at',
+            ])
+            ->selectRaw($classificationSql.' AS traffic_type', $bindings);
+    }
+
+    private function baseQuery(AnalyticsLogFilter $logFilter, AnalyticsFilter $contentFilter, bool $supportedSourcesOnly = true): Builder
+    {
+        $query = DB::table('view_logs')
+            ->leftJoin('articles as a', 'view_logs.article_id', '=', 'a.id')
+            ->whereBetween('view_logs.created_at', [$logFilter->start(), $logFilter->end()])
+            ->where('view_logs.method', 'GET');
+
+        if ($supportedSourcesOnly) {
+            if ($logFilter->source === 'all') {
+                $query->whereIn('view_logs.source', AnalyticsLogFilter::supportedSources());
+            } else {
+                $query->where('view_logs.source', $logFilter->source);
             }
         }
 
-        return array_map(fn (array $article): array => [
-            'path' => $article['slug'] !== '' ? '/article/'.$article['slug'] : '/article/'.$article['article_id'],
-            'views' => $article['views'],
-            'unique_ip' => $article['unique_ip'],
-        ], $this->topArticles($filter));
-    }
-
-    private function errorCount(Builder $query): int
-    {
-        if (! Schema::hasColumn('view_logs', 'status_code')) {
-            return 0;
+        if ($contentFilter->articleId !== null) {
+            $query->where('view_logs.article_id', $contentFilter->articleId);
         }
-
-        return (int) $query->where('view_logs.status_code', '>=', 400)->count();
-    }
-
-    private function withTrafficType(Builder $query, string $trafficType): Builder
-    {
-        $this->applyTrafficFilter($query, $trafficType);
+        if ($contentFilter->taskId !== null) {
+            $query->where('a.task_id', $contentFilter->taskId);
+        }
+        if ($contentFilter->categoryId !== null) {
+            $query->where('a.category_id', $contentFilter->categoryId);
+        }
 
         return $query;
     }
 
-    private function applyTrafficFilter(Builder $query, string $trafficType): void
+    private function applySelectedTraffic(Builder $query, AnalyticsLogFilter $logFilter): void
     {
-        match ($trafficType) {
-            'human' => $this->whereHuman($query),
-            'search_bot' => $this->whereAnyPattern($query, self::SEARCH_BOT_PATTERNS),
-            'ai_bot' => $this->whereAnyPattern($query, self::AI_BOT_PATTERNS),
-            'other_bot' => $this->whereOtherBot($query),
-            'unknown' => $query->whereRaw("TRIM(COALESCE(view_logs.user_agent, '')) = ''"),
-            default => null,
-        };
-    }
-
-    /**
-     * @param  list<string>  $patterns
-     */
-    private function whereAnyPattern(Builder $query, array $patterns): void
-    {
-        $query->where(function (Builder $inner) use ($patterns): void {
-            foreach ($patterns as $pattern) {
-                $inner->orWhereRaw("LOWER(COALESCE(view_logs.user_agent, '')) LIKE ?", ['%'.$pattern.'%']);
-            }
-        });
-    }
-
-    /**
-     * @param  list<string>  $patterns
-     */
-    private function whereNoPattern(Builder $query, array $patterns): void
-    {
-        foreach ($patterns as $pattern) {
-            $query->whereRaw("LOWER(COALESCE(view_logs.user_agent, '')) NOT LIKE ?", ['%'.$pattern.'%']);
+        if ($logFilter->trafficType !== 'all') {
+            $query->where('traffic_type', $logFilter->trafficType);
         }
     }
 
-    private function whereHuman(Builder $query): void
+    /**
+     * @return array{0: string, 1: list<string>}
+     */
+    private function classificationCase(): array
     {
-        $query->whereRaw("TRIM(COALESCE(view_logs.user_agent, '')) != ''");
-        $this->whereNoPattern($query, [
-            ...self::AI_BOT_PATTERNS,
-            ...self::SEARCH_BOT_PATTERNS,
-            ...self::GENERIC_BOT_PATTERNS,
-        ]);
+        [$aiSql, $aiBindings] = $this->patternCondition(TrafficClassifier::aiBotPatterns());
+        [$searchSql, $searchBindings] = $this->patternCondition(TrafficClassifier::searchBotPatterns());
+        [$otherSql, $otherBindings] = $this->patternCondition(TrafficClassifier::otherBotPatterns());
+
+        return [
+            "CASE
+                WHEN TRIM(COALESCE(view_logs.user_agent, '')) = '' THEN 'unknown'
+                WHEN {$aiSql} THEN 'ai_bot'
+                WHEN {$searchSql} THEN 'search_bot'
+                WHEN {$otherSql} THEN 'other_bot'
+                ELSE 'human'
+            END",
+            [...$aiBindings, ...$searchBindings, ...$otherBindings],
+        ];
     }
 
-    private function whereOtherBot(Builder $query): void
+    /**
+     * @param  list<string>  $patterns
+     * @return array{0: string, 1: list<string>}
+     */
+    private function patternCondition(array $patterns): array
     {
-        $this->whereAnyPattern($query, self::GENERIC_BOT_PATTERNS);
-        $this->whereNoPattern($query, [
-            ...self::AI_BOT_PATTERNS,
-            ...self::SEARCH_BOT_PATTERNS,
-        ]);
+        return [
+            '('.implode(' OR ', array_fill(0, count($patterns), "LOWER(COALESCE(view_logs.user_agent, '')) LIKE ?")).')',
+            array_map(fn (string $pattern): string => '%'.$pattern.'%', $patterns),
+        ];
+    }
+
+    /**
+     * @return array{date: string, pv: int, unique_ip: int, ai_bot_pv: int, errors: int}
+     */
+    private function emptyTrendDay(Carbon $day): array
+    {
+        return [
+            'date' => $day->toDateString(),
+            'pv' => 0,
+            'unique_ip' => 0,
+            'ai_bot_pv' => 0,
+            'errors' => 0,
+        ];
     }
 
     /**
      * @return list<Carbon>
      */
-    private function days(AnalyticsFilter $filter): array
+    private function days(AnalyticsLogFilter $logFilter): array
     {
         $days = [];
-        $cursor = $filter->dateFrom->copy()->startOfDay();
-        $end = $filter->dateTo->copy()->startOfDay();
+        $cursor = $logFilter->dateFrom->copy()->startOfDay();
+        $end = $logFilter->dateTo->copy()->startOfDay();
 
         while ($cursor->lessThanOrEqualTo($end)) {
             $days[] = $cursor->copy();

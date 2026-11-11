@@ -2,21 +2,25 @@
 
 @section('content')
     <div class="px-4 sm:px-0">
-        <div class="mb-8 flex items-center justify-between">
-            <div class="flex items-center space-x-4">
-                <a href="{{ route('admin.materials.index') }}" class="text-gray-400 hover:text-gray-600">
-                    <i data-lucide="arrow-left" class="w-5 h-5"></i>
-                </a>
-                <div>
-                    <h1 class="text-2xl font-bold text-gray-900">{{ __('admin.knowledge_bases.heading') }}</h1>
-                    <p class="mt-1 text-sm text-gray-600">{{ __('admin.knowledge_bases.subtitle') }}</p>
+        <header class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div class="min-w-0 flex-1">
+                <div class="sr-only">
+                    <h1>{{ __('admin.knowledge_bases.heading') }}</h1>
+                    <p>{{ __('admin.knowledge_bases.subtitle') }}</p>
                 </div>
+                <x-admin.v3.materials-subnav active="knowledge-bases" />
             </div>
-            <button type="button" onclick="showUploadModal()" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-orange-600 hover:bg-orange-700">
-                <i data-lucide="upload" class="w-4 h-4 mr-2"></i>
-                {{ __('admin.knowledge_bases.upload') }}
-            </button>
-        </div>
+            <div class="flex flex-wrap items-center gap-3">
+                <a href="{{ route('admin.knowledge-bases.create') }}" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                    <i data-lucide="plus" class="w-4 h-4 mr-2"></i>
+                    {{ __('admin.knowledge_bases.create_first') }}
+                </a>
+                <a href="{{ route('admin.knowledge-bases.create', ['mode' => 'upload']) }}" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-orange-600 hover:bg-orange-700">
+                    <i data-lucide="upload" class="w-4 h-4 mr-2"></i>
+                    {{ __('admin.knowledge_bases.import_unified') }}
+                </a>
+            </div>
+        </header>
 
         <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
             <div class="bg-white overflow-hidden shadow rounded-lg">
@@ -91,24 +95,28 @@
                     <h3 class="text-lg font-medium text-gray-900 mb-2">{{ __('admin.knowledge_bases.empty') }}</h3>
                     <p class="text-gray-500 mb-4">{{ __('admin.knowledge_bases.empty_desc') }}</p>
                     <div class="flex justify-center space-x-2">
-                        <button type="button" onclick="showCreateModal()" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-orange-600 hover:bg-orange-700">
+                        <a href="{{ route('admin.knowledge-bases.create') }}" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-orange-600 hover:bg-orange-700">
                             <i data-lucide="plus" class="w-4 h-4 mr-2"></i>
                             {{ __('admin.knowledge_bases.create_first') }}
-                        </button>
-                        <button type="button" onclick="showUploadModal()" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                        </a>
+                        <a href="{{ route('admin.knowledge-bases.create', ['mode' => 'upload']) }}" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
                             <i data-lucide="upload" class="w-4 h-4 mr-2"></i>
-                            {{ __('admin.knowledge_bases.upload_doc') }}
-                        </button>
+                            {{ __('admin.knowledge_bases.import_unified') }}
+                        </a>
                     </div>
                 </div>
             @else
                 <div class="flex items-center justify-between gap-6 px-6 py-3 border-b border-gray-200 bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
                     <div>{{ __('admin.knowledge_bases.column_knowledge_base') }}</div>
-                    <div class="text-right" style="width: 440px;">{{ __('admin.common.actions') }}</div>
+                    <div class="hidden w-[440px] text-right lg:block">{{ __('admin.common.actions') }}</div>
                 </div>
                 <div class="divide-y divide-gray-200">
                     @foreach ($knowledgeBases as $item)
-                        <div class="px-6 py-6">
+                        @php
+                            $isSystemKnowledge = (bool) ($item['is_system'] ?? false);
+                            $systemHealth = is_array($item['system_health'] ?? null) ? $item['system_health'] : null;
+                        @endphp
+                        <div class="px-6 py-6" data-system-knowledge="{{ $isSystemKnowledge ? 'true' : 'false' }}">
                             <div class="flex flex-col gap-5 lg:flex-row lg:items-center">
                                 <div class="min-w-0 lg:flex-1">
                                     <div class="flex flex-wrap items-center gap-2">
@@ -122,15 +130,40 @@
                                             $typeBadgeClass = $type === 'markdown'
                                                 ? 'bg-green-100 text-green-800'
                                                 : ($type === 'word' ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800');
-                                            $typeText = $type === 'markdown'
-                                                ? __('admin.status.markdown')
-                                                : ($type === 'word' ? __('admin.status.word_document') : __('admin.status.text'));
+                                            $typeText = match ($type) {
+                                                'markdown' => __('admin.status.markdown'),
+                                                'word' => __('admin.status.word_document'),
+                                                'pdf' => __('admin.status.pdf_document'),
+                                                'presentation' => __('admin.status.presentation'),
+                                                default => __('admin.status.text'),
+                                            };
                                         @endphp
                                         <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium {{ $typeBadgeClass }}">
                                             {{ $typeText }}
                                         </span>
+                                        @if ($isSystemKnowledge)
+                                            <span class="inline-flex items-center gap-1 rounded-full bg-orange-50 px-2.5 py-1 text-xs font-semibold text-orange-700 ring-1 ring-inset ring-orange-200">
+                                                <i data-lucide="sparkles" class="h-3.5 w-3.5"></i>
+                                                {{ __('admin.knowledge_bases.system_badge') }}
+                                            </span>
+                                            <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+                                                {{ __('admin.knowledge_bases.system_health.'.($systemHealth['status'] ?? 'fallback')) }}
+                                            </span>
+                                        @endif
                                         <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800">
                                             {{ __('admin.knowledge_bases.text_unit', ['count' => number_format((int) $item['word_count'])]) }}
+                                        </span>
+                                        @php
+                                            $syncStatus = (string) ($item['chunk_sync_status'] ?? 'idle');
+                                            $syncStatusClass = match ($syncStatus) {
+                                                'pending', 'processing' => 'bg-amber-50 text-amber-700',
+                                                'ready' => 'bg-emerald-50 text-emerald-700',
+                                                'failed' => 'bg-red-50 text-red-700',
+                                                default => 'bg-gray-50 text-gray-600',
+                                            };
+                                        @endphp
+                                        <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium {{ $syncStatusClass }}">
+                                            {{ __('admin.knowledge_bases.sync_status.'.$syncStatus) }}
                                         </span>
                                         @if ((int) ($item['chunk_count'] ?? 0) > 0)
                                             <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-700">
@@ -143,6 +176,18 @@
                                     </div>
                                     @if ($item['description'] !== '')
                                         <p class="mt-1 text-sm text-gray-600">{{ $item['description'] }}</p>
+                                    @endif
+                                    @if ($isSystemKnowledge)
+                                        <p class="mt-2 flex items-start gap-2 text-sm leading-6 text-orange-800">
+                                            <i data-lucide="shield-check" class="mt-0.5 h-4 w-4 shrink-0"></i>
+                                            <span>
+                                                {{ __('admin.knowledge_bases.system_protected_hint') }}
+                                                {{ __('admin.knowledge_bases.system_version', ['version' => (string) ($item['official_version'] ?? '-')]) }}
+                                            </span>
+                                        </p>
+                                    @endif
+                                    @if ($syncStatus === 'failed' && ($item['chunk_sync_error'] ?? '') !== '')
+                                        <p class="mt-1 text-sm text-red-600">{{ $item['chunk_sync_error'] }}</p>
                                     @endif
                                     <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-500">
                                         <span>
@@ -157,8 +202,8 @@
                                     </div>
                                 </div>
 
-                                <div class="flex flex-wrap items-start justify-start gap-2 lg:shrink-0 lg:justify-end lg:pl-8" style="width: 440px;">
-                                    @if ($hasDefaultEmbeddingModel)
+                                <div class="flex w-full flex-wrap items-start justify-start gap-2 lg:w-[440px] lg:shrink-0 lg:justify-end lg:pl-8">
+                                    @if ($isSystemKnowledge || $hasDefaultEmbeddingModel)
                                         <div style="width: 148px;" data-refresh-chunks-action>
                                             <form
                                                 method="POST"
@@ -171,11 +216,17 @@
                                                     'chunks' => (int) ($item['chunk_count'] ?? 0),
                                                 ]) }}"
                                                 data-word-count="{{ __('admin.knowledge_bases.text_unit', ['count' => number_format((int) $item['word_count'])]) }}"
+                                                data-dialog-title="{{ __('admin.knowledge_bases.refresh_confirm_title') }}"
+                                                data-dialog-intro="{{ __('admin.knowledge_bases.refresh_confirm_intro') }}"
+                                                data-dialog-target-label="{{ __('admin.knowledge_bases.refresh_confirm_target') }}"
+                                                data-dialog-guidance="{{ __('admin.knowledge_bases.refresh_confirm_rebuild') }}：{{ __('admin.knowledge_bases.refresh_confirm_rebuild_desc') }}&#10;{{ __('admin.knowledge_bases.refresh_confirm_embedding') }}：{{ __('admin.knowledge_bases.refresh_confirm_embedding_desc') }}&#10;{{ __('admin.knowledge_bases.refresh_confirm_write') }}：{{ __('admin.knowledge_bases.refresh_confirm_write_desc') }}&#10;{{ __('admin.knowledge_bases.refresh_confirm_body') }}"
+                                                data-dialog-confirm-label="{{ __('admin.knowledge_bases.refresh_confirm_continue') }}"
+                                                data-dialog-cancel-label="{{ __('admin.button.cancel') }}"
                                             >
                                                 @csrf
-                                                <button type="submit" class="inline-flex w-full items-center justify-center px-3 py-1.5 border border-emerald-200 text-xs font-medium rounded text-emerald-700 bg-emerald-50 hover:bg-emerald-100" data-refresh-submit-button>
+                                                <button type="submit" class="inline-flex w-full items-center justify-center px-3 py-1.5 border border-emerald-200 text-xs font-medium rounded text-emerald-700 bg-emerald-50 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60" data-refresh-submit-button disabled aria-disabled="true">
                                                     <i data-lucide="refresh-cw" class="w-4 h-4 mr-1" data-refresh-submit-icon></i>
-                                                    <span data-refresh-submit-label>{{ __('admin.knowledge_bases.refresh_chunks') }}</span>
+                                                    <span data-refresh-submit-label>{{ $isSystemKnowledge ? __('admin.knowledge_bases.system_refresh_index') : __('admin.knowledge_bases.refresh_chunks') }}</span>
                                                 </button>
                                             </form>
                                             <div class="mt-2 hidden" data-refresh-progress>
@@ -189,7 +240,7 @@
                                             </div>
                                         </div>
                                     @else
-                                        <button type="button" onclick="showEmbeddingConfigModal()" class="inline-flex items-center px-3 py-1.5 border border-amber-200 text-xs font-medium rounded text-amber-800 bg-amber-50 hover:bg-amber-100">
+                                        <button type="button" data-embedding-config-open class="inline-flex items-center px-3 py-1.5 border border-amber-200 text-xs font-medium rounded text-amber-800 bg-amber-50 hover:bg-amber-100">
                                             <i data-lucide="refresh-cw" class="w-4 h-4 mr-1"></i>
                                             {{ __('admin.knowledge_bases.refresh_chunks') }}
                                         </button>
@@ -202,13 +253,15 @@
                                         <i data-lucide="eye" class="w-4 h-4 mr-1"></i>
                                         {{ __('admin.button.view') }}
                                     </a>
-                                    <form method="POST" action="{{ route('admin.knowledge-bases.delete', ['knowledgeBaseId' => (int) $item['id']]) }}" onsubmit="return confirm(@js(__('admin.knowledge_bases.confirm_delete', ['name' => $item['name']])));" class="inline-block">
-                                        @csrf
-                                        <button type="submit" class="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded text-white bg-red-600 hover:bg-red-700">
-                                            <i data-lucide="trash-2" class="w-4 h-4 mr-1"></i>
-                                            {{ __('admin.button.delete') }}
-                                        </button>
-                                    </form>
+                                    @unless ($isSystemKnowledge)
+                                        <form method="POST" action="{{ route('admin.knowledge-bases.delete', ['knowledgeBaseId' => (int) $item['id']]) }}" class="inline-block" data-admin-confirm-form data-admin-confirm-tone="danger" data-admin-confirm-title="{{ __('admin.knowledge_bases.confirm_delete', ['name' => $item['name']]) }}" data-admin-confirm-message="{{ __('admin.action_dialog.generic_impact') }}" data-admin-confirm-label="{{ __('admin.button.delete') }}">
+                                            @csrf
+                                            <button type="submit" class="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded text-white bg-red-600 hover:bg-red-700" data-admin-confirm-submit disabled aria-disabled="true">
+                                                <i data-lucide="trash-2" class="w-4 h-4 mr-1"></i>
+                                                {{ __('admin.button.delete') }}
+                                            </button>
+                                        </form>
+                                    @endunless
                                 </div>
                             </div>
                         </div>
@@ -218,256 +271,11 @@
         </div>
     </div>
 
-    <div id="create-modal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-        <div class="relative top-10 mx-auto p-5 border w-2/3 max-w-4xl shadow-lg rounded-md bg-white">
-            <div class="mt-3">
-                <h3 class="text-lg font-medium text-gray-900 mb-4">{{ __('admin.knowledge_bases.modal_create') }}</h3>
-                <form method="POST" action="{{ route('admin.knowledge-bases.store') }}">
-                    @csrf
-                    <div class="space-y-4">
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">{{ __('admin.knowledge_bases.field_name') }}</label>
-                                <input type="text" name="name" required class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-orange-500 focus:border-orange-500 sm:text-sm" placeholder="{{ __('admin.knowledge_bases.placeholder_name') }}">
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">{{ __('admin.knowledge_bases.field_doc_type') }}</label>
-                                <select name="file_type" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-orange-500 focus:border-orange-500 sm:text-sm">
-                                    <option value="markdown">{{ __('admin.status.markdown') }}</option>
-                                    <option value="text">{{ __('admin.status.text') }}</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">{{ __('admin.knowledge_bases.field_description') }}</label>
-                            <textarea name="description" rows="2" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-orange-500 focus:border-orange-500 sm:text-sm" placeholder="{{ __('admin.knowledge_bases.placeholder_description') }}"></textarea>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">{{ __('admin.knowledge_bases.field_content') }}</label>
-                            <textarea name="content" rows="15" required class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-orange-500 focus:border-orange-500 sm:text-sm font-mono" placeholder="{{ __('admin.knowledge_bases.placeholder_content') }}"></textarea>
-                        </div>
-                    </div>
-
-                    <div class="mt-6 flex justify-end space-x-3">
-                        <button type="button" onclick="hideCreateModal()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">
-                            {{ __('admin.button.cancel') }}
-                        </button>
-                        <button type="submit" class="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-orange-600 hover:bg-orange-700">
-                            {{ __('admin.knowledge_bases.create_first') }}
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-
-    <div id="upload-modal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-        <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
-            <div class="mt-3">
-                <h3 class="text-lg font-medium text-gray-900 mb-4">{{ __('admin.knowledge_bases.modal_upload') }}</h3>
-                <form method="POST" action="{{ route('admin.knowledge-bases.upload') }}" enctype="multipart/form-data">
-                    @csrf
-
-                    <div class="space-y-4">
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">{{ __('admin.common.name') }}</label>
-                            <input type="text" name="name" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-orange-500 focus:border-orange-500 sm:text-sm" placeholder="{{ __('admin.knowledge_bases.placeholder_name_optional') }}">
-                        </div>
-
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">{{ __('admin.knowledge_bases.field_description') }}</label>
-                            <textarea name="description" rows="2" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-orange-500 focus:border-orange-500 sm:text-sm" placeholder="{{ __('admin.knowledge_bases.placeholder_upload_description') }}"></textarea>
-                        </div>
-
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">{{ __('admin.knowledge_bases.field_file') }}</label>
-                            <div class="mt-1">
-                                <input type="file" id="knowledge-file-input" name="knowledge_file" required accept=".txt,.md,.docx" class="sr-only">
-                                <label for="knowledge-file-input" class="flex items-center gap-3 rounded-md border border-gray-300 px-4 py-3 text-sm text-gray-600 cursor-pointer hover:border-orange-300 hover:bg-orange-50/40">
-                                    <span class="inline-flex items-center rounded-full bg-orange-50 px-4 py-2 font-semibold text-orange-700">
-                                        {{ __('admin.knowledge_bases.file_choose') }}
-                                    </span>
-                                    <span id="knowledge-file-name" class="min-w-0 truncate text-gray-500">
-                                        {{ __('admin.knowledge_bases.file_none_selected') }}
-                                    </span>
-                                </label>
-                            </div>
-                        </div>
-
-                        <div class="text-sm text-gray-500">
-                            <p class="mb-2">{{ __('admin.knowledge_bases.format_help') }}</p>
-                            <ul class="list-disc list-inside space-y-1">
-                                <li>{{ __('admin.knowledge_bases.format_txt') }}</li>
-                                <li>{{ __('admin.knowledge_bases.format_md') }}</li>
-                                <li>{{ __('admin.knowledge_bases.format_docx') }}</li>
-                                <li>{{ __('admin.knowledge_bases.format_doc') }}</li>
-                            </ul>
-                        </div>
-                    </div>
-
-                    <div class="mt-6 flex justify-end space-x-3">
-                        <button type="button" onclick="hideUploadModal()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">
-                            {{ __('admin.button.cancel') }}
-                        </button>
-                        <button type="submit" class="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-orange-600 hover:bg-orange-700">
-                            <i data-lucide="upload" class="w-4 h-4 mr-2 inline"></i>
-                            {{ __('admin.knowledge_bases.upload_doc') }}
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-
-    <div id="embedding-config-modal" class="hidden fixed inset-0 z-50">
-        <div class="absolute inset-0 bg-slate-900/45"></div>
-        <div class="relative flex min-h-screen items-center justify-center p-4">
-            <div class="w-full max-w-lg rounded-2xl bg-white shadow-2xl ring-1 ring-slate-200">
-                <div class="border-b border-slate-100 px-6 py-5">
-                    <h3 class="text-lg font-semibold text-slate-900">{{ __('admin.knowledge_bases.vector_config_modal_title') }}</h3>
-                </div>
-                <div class="px-6 py-5">
-                    <div class="text-sm leading-7 text-slate-600 whitespace-pre-line">{{ __('admin.knowledge_bases.vector_config_prompt') }}</div>
-                </div>
-                <div class="flex items-center justify-end gap-3 border-t border-slate-100 px-6 py-4">
-                    <button type="button" onclick="hideEmbeddingConfigModal()" class="inline-flex items-center rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
-                        {{ __('admin.button.cancel') }}
-                    </button>
-                    <a href="{{ route('admin.ai.configurator') }}" class="inline-flex items-center rounded-xl bg-amber-500 px-4 py-2 text-sm font-medium text-white hover:bg-amber-600">
-                        {{ __('admin.knowledge_bases.vector_notice_configure_link') }}
-                    </a>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div id="refresh-chunks-modal" class="hidden fixed inset-0 z-50" data-knowledge-refresh-modal>
-        <div class="absolute inset-0 bg-slate-900/45" data-refresh-chunks-cancel></div>
-        <div class="relative flex min-h-screen items-center justify-center p-4">
-            <div class="w-full max-w-xl overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-slate-200">
-                <div class="border-b border-slate-100 px-6 py-5">
-                    <div class="flex items-start gap-4">
-                        <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
-                            <i data-lucide="refresh-cw" class="h-5 w-5"></i>
-                        </div>
-                        <div class="min-w-0">
-                            <h3 class="text-lg font-semibold text-slate-900">{{ __('admin.knowledge_bases.refresh_confirm_title') }}</h3>
-                            <p class="mt-1 text-sm leading-6 text-slate-600">{{ __('admin.knowledge_bases.refresh_confirm_intro') }}</p>
-                        </div>
-                    </div>
-                </div>
-                <div class="space-y-5 px-6 py-5">
-                    <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                        <div class="text-xs font-medium uppercase tracking-wide text-slate-500">{{ __('admin.knowledge_bases.refresh_confirm_target') }}</div>
-                        <div class="mt-1 text-sm font-semibold text-slate-900" data-refresh-modal-name>-</div>
-                        <div class="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
-                            <span class="rounded-full bg-white px-2.5 py-1 ring-1 ring-slate-200" data-refresh-modal-summary>-</span>
-                            <span class="rounded-full bg-white px-2.5 py-1 ring-1 ring-slate-200" data-refresh-modal-words>-</span>
-                        </div>
-                    </div>
-                    <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                        <div class="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-3">
-                            <div class="text-sm font-semibold text-emerald-800">{{ __('admin.knowledge_bases.refresh_confirm_rebuild') }}</div>
-                            <p class="mt-1 text-xs leading-5 text-emerald-700">{{ __('admin.knowledge_bases.refresh_confirm_rebuild_desc') }}</p>
-                        </div>
-                        <div class="rounded-xl border border-blue-100 bg-blue-50 px-3 py-3">
-                            <div class="text-sm font-semibold text-blue-800">{{ __('admin.knowledge_bases.refresh_confirm_embedding') }}</div>
-                            <p class="mt-1 text-xs leading-5 text-blue-700">{{ __('admin.knowledge_bases.refresh_confirm_embedding_desc') }}</p>
-                        </div>
-                        <div class="rounded-xl border border-purple-100 bg-purple-50 px-3 py-3">
-                            <div class="text-sm font-semibold text-purple-800">{{ __('admin.knowledge_bases.refresh_confirm_write') }}</div>
-                            <p class="mt-1 text-xs leading-5 text-purple-700">{{ __('admin.knowledge_bases.refresh_confirm_write_desc') }}</p>
-                        </div>
-                    </div>
-                    <p class="text-sm leading-6 text-slate-600">{{ __('admin.knowledge_bases.refresh_confirm_body') }}</p>
-                </div>
-                <div class="flex items-center justify-end gap-3 border-t border-slate-100 px-6 py-4">
-                    <button type="button" class="inline-flex items-center rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50" data-refresh-chunks-cancel>
-                        {{ __('admin.button.cancel') }}
-                    </button>
-                    <button type="button" class="inline-flex items-center rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700" data-refresh-chunks-confirm>
-                        <i data-lucide="play" class="mr-2 h-4 w-4"></i>
-                        {{ __('admin.knowledge_bases.refresh_confirm_continue') }}
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
 @endsection
 
 @push('scripts')
     <script>
-        let pendingRefreshChunksForm = null;
         let refreshChunksTimer = null;
-
-        function showCreateModal() {
-            document.getElementById('create-modal').classList.remove('hidden');
-        }
-
-        function hideCreateModal() {
-            document.getElementById('create-modal').classList.add('hidden');
-        }
-
-        function showUploadModal() {
-            document.getElementById('upload-modal').classList.remove('hidden');
-        }
-
-        function hideUploadModal() {
-            document.getElementById('upload-modal').classList.add('hidden');
-        }
-
-        function showEmbeddingConfigModal() {
-            const modal = document.getElementById('embedding-config-modal');
-            if (modal) {
-                modal.classList.remove('hidden');
-            }
-        }
-
-        function hideEmbeddingConfigModal() {
-            const modal = document.getElementById('embedding-config-modal');
-            if (modal) {
-                modal.classList.add('hidden');
-            }
-        }
-
-        function showRefreshChunksModal(form) {
-            const modal = document.querySelector('[data-knowledge-refresh-modal]');
-            if (!modal) {
-                return true;
-            }
-
-            pendingRefreshChunksForm = form;
-            const nameNode = modal.querySelector('[data-refresh-modal-name]');
-            const summaryNode = modal.querySelector('[data-refresh-modal-summary]');
-            const wordsNode = modal.querySelector('[data-refresh-modal-words]');
-
-            if (nameNode) {
-                nameNode.textContent = form.dataset.knowledgeName || '-';
-            }
-            if (summaryNode) {
-                summaryNode.textContent = form.dataset.knowledgeSummary || '-';
-            }
-            if (wordsNode) {
-                wordsNode.textContent = form.dataset.wordCount || '-';
-            }
-
-            modal.classList.remove('hidden');
-            const confirmButton = modal.querySelector('[data-refresh-chunks-confirm]');
-            if (confirmButton) {
-                setTimeout(function () {
-                    confirmButton.focus();
-                }, 0);
-            }
-
-            return false;
-        }
-
-        function hideRefreshChunksModal() {
-            const modal = document.querySelector('[data-knowledge-refresh-modal]');
-            if (modal) {
-                modal.classList.add('hidden');
-            }
-        }
 
         function startRefreshChunksProgress(form) {
             const wrapper = form.closest('[data-refresh-chunks-action]');
@@ -526,67 +334,51 @@
         }
 
         document.addEventListener('DOMContentLoaded', function () {
-            const fileInput = document.getElementById('knowledge-file-input');
-            const fileName = document.getElementById('knowledge-file-name');
-            if (fileInput && fileName) {
-                fileInput.addEventListener('change', function () {
-                    fileName.textContent = this.files && this.files.length > 0
-                        ? this.files[0].name
-                        : @json(__('admin.knowledge_bases.file_none_selected'));
-                });
-            }
+            const actionDialog = window.AdminActionDialog;
+            if (! actionDialog?.confirm) return;
+            const confirmingForms = new WeakSet();
 
             document.querySelectorAll('[data-refresh-chunks-form]').forEach(function (form) {
-                form.addEventListener('submit', function (event) {
-                    event.preventDefault();
-                    showRefreshChunksModal(form);
-                });
-            });
-
-            document.querySelectorAll('[data-refresh-chunks-cancel]').forEach(function (button) {
-                button.addEventListener('click', function () {
-                    pendingRefreshChunksForm = null;
-                    hideRefreshChunksModal();
-                });
-            });
-
-            const refreshConfirmButton = document.querySelector('[data-refresh-chunks-confirm]');
-            if (refreshConfirmButton) {
-                refreshConfirmButton.addEventListener('click', function () {
-                    if (!pendingRefreshChunksForm) {
-                        hideRefreshChunksModal();
-                        return;
-                    }
-
-                    const form = pendingRefreshChunksForm;
-                    pendingRefreshChunksForm = null;
-                    hideRefreshChunksModal();
-                    startRefreshChunksProgress(form);
-                });
-            }
-
-            document.addEventListener('keydown', function (event) {
-                if (event.key === 'Escape' && pendingRefreshChunksForm) {
-                    pendingRefreshChunksForm = null;
-                    hideRefreshChunksModal();
+                const button = form.querySelector('[data-refresh-submit-button]');
+                if (button) {
+                    button.disabled = false;
+                    button.removeAttribute('aria-disabled');
                 }
+
+                form.addEventListener('submit', async function (event) {
+                    event.preventDefault();
+                    if (confirmingForms.has(form)) return;
+                    confirmingForms.add(form);
+                    const target = [form.dataset.knowledgeName, form.dataset.knowledgeSummary, form.dataset.wordCount]
+                        .filter(Boolean)
+                        .join(' · ');
+                    const confirmed = await actionDialog.confirm({
+                        title: form.dataset.dialogTitle || '',
+                        message: `${form.dataset.dialogIntro || ''}\n${form.dataset.dialogTargetLabel || ''}：${target}`,
+                        guidance: form.dataset.dialogGuidance || '',
+                        tone: 'success',
+                        confirmLabel: form.dataset.dialogConfirmLabel || '',
+                        cancelLabel: form.dataset.dialogCancelLabel || '',
+                        opener: event.submitter || button,
+                    });
+                    confirmingForms.delete(form);
+                    if (confirmed === true) startRefreshChunksProgress(form);
+                });
             });
-        });
 
-        window.addEventListener('click', function (event) {
-            const createModal = document.getElementById('create-modal');
-            const uploadModal = document.getElementById('upload-modal');
-            const embeddingConfigModal = document.getElementById('embedding-config-modal');
-
-            if (event.target === createModal) {
-                hideCreateModal();
-            }
-            if (event.target === uploadModal) {
-                hideUploadModal();
-            }
-            if (event.target === embeddingConfigModal || (embeddingConfigModal && event.target === embeddingConfigModal.firstElementChild)) {
-                hideEmbeddingConfigModal();
-            }
+            document.querySelectorAll('[data-embedding-config-open]').forEach(function (button) {
+                button.addEventListener('click', async function () {
+                    const confirmed = await actionDialog.confirm({
+                        title: @json(__('admin.knowledge_bases.vector_config_modal_title')),
+                        message: @json(__('admin.knowledge_bases.vector_config_prompt')),
+                        tone: 'warning',
+                        confirmLabel: @json(__('admin.knowledge_bases.vector_notice_configure_link')),
+                        cancelLabel: @json(__('admin.button.cancel')),
+                        opener: button,
+                    });
+                    if (confirmed === true) window.location.assign(@json(route('admin.ai.configurator')));
+                });
+            });
         });
     </script>
 @endpush

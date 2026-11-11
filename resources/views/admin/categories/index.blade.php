@@ -1,23 +1,35 @@
 @extends('admin.layouts.app')
 
+@php
+    $adminUiV3Enabled = (bool) config('geoflow.admin_ui_v3_enabled', false);
+@endphp
+
 @section('content')
     <div class="px-4 sm:px-0">
-        <div class="mb-8">
-            <div class="flex items-center justify-between">
-                <div>
+        <div class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div class="min-w-0 flex-1">
+                @if($adminUiV3Enabled)
+                    <div class="sr-only">
+                        <h1>{{ __('admin.categories.heading') }}</h1>
+                        <p>{{ __('admin.categories.subtitle') }}</p>
+                    </div>
+                @else
                     <h1 class="text-2xl font-bold text-gray-900">{{ __('admin.categories.heading') }}</h1>
                     <p class="mt-1 text-sm text-gray-600">{{ __('admin.categories.subtitle') }}</p>
+                @endif
+                <div @class(['mt-3' => !$adminUiV3Enabled])>
+                    <x-admin.v3.articles-subnav active="categories" />
                 </div>
-                <div class="flex space-x-3">
-                    <a href="{{ route('admin.categories.create') }}" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700">
-                        <i data-lucide="plus" class="w-4 h-4 mr-2"></i>
-                        {{ __('admin.categories.add') }}
-                    </a>
-                    <a href="{{ route('admin.articles.index') }}" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
-                        <i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i>
-                        {{ __('admin.categories.back_to_articles') }}
-                    </a>
-                </div>
+            </div>
+            <div class="flex shrink-0 space-x-3">
+                <a href="{{ route('admin.categories.create') }}" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700">
+                    <i data-lucide="plus" class="w-4 h-4 mr-2"></i>
+                    {{ __('admin.categories.add') }}
+                </a>
+                <a href="{{ route('admin.articles.index') }}" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                    <i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i>
+                    {{ __('admin.categories.back_to_articles') }}
+                </a>
             </div>
         </div>
         <div class="bg-white shadow rounded-lg">
@@ -36,7 +48,7 @@
                         </a>
                     </div>
                 @else
-                    <table class="min-w-full divide-y divide-gray-200">
+                    <table class="min-w-full divide-y divide-gray-200" data-sticky-actions>
                         <thead class="bg-gray-50">
                         <tr>
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{{ __('admin.categories.column_info') }}</th>
@@ -50,6 +62,8 @@
                         @foreach ($categories as $category)
                             @php
                                 $articleCount = (int) ($category['article_count'] ?? 0);
+                                $activeArticleCount = (int) ($category['active_article_count'] ?? $articleCount);
+                                $trashedArticleCount = (int) ($category['trashed_article_count'] ?? max(0, $articleCount - $activeArticleCount));
                             @endphp
                             <tr class="hover:bg-gray-50">
                                 <td class="px-6 py-4">
@@ -61,6 +75,9 @@
                                 </td>
                                 <td class="px-6 py-4 text-sm text-gray-700">
                                     <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">{{ __('admin.categories.article_count_badge', ['count' => $articleCount]) }}</span>
+                                    @if ($trashedArticleCount > 0)
+                                        <div class="mt-1 text-xs text-gray-500">{{ __('admin.categories.article_count_trashed_hint', ['count' => $trashedArticleCount]) }}</div>
+                                    @endif
                                 </td>
                                 <td class="px-6 py-4 text-sm text-gray-700">{{ (int) ($category['sort_order'] ?? 0) }}</td>
                                 <td class="px-6 py-4 text-sm text-gray-500">{{ !empty($category['created_at']) ? \Illuminate\Support\Carbon::parse($category['created_at'])->format('Y-m-d H:i') : '-' }}</td>
@@ -71,9 +88,9 @@
                                         </a>
 
                                         @if ($articleCount === 0)
-                                            <form method="POST" action="{{ route('admin.categories.delete', ['categoryId' => (int) $category['id']]) }}" class="inline" onsubmit="return confirm(@js(__('admin.categories.confirm_delete')));">
+                                            <form method="POST" action="{{ route('admin.categories.delete', ['categoryId' => (int) $category['id']]) }}" class="inline" data-admin-confirm-form data-admin-confirm-tone="danger" data-admin-confirm-title="{{ __('admin.categories.confirm_delete') }}" data-admin-confirm-message="{{ __('admin.action_dialog.target', ['name' => $category['name']]) }}" data-admin-confirm-guidance="{{ __('admin.action_dialog.generic_impact') }}" data-admin-confirm-label="{{ __('admin.button.delete') }}">
                                                 @csrf
-                                                <button type="submit" class="text-red-600 hover:text-red-800" title="{{ __('admin.button.delete') }}">
+                                                <button type="submit" class="text-red-600 hover:text-red-800" title="{{ __('admin.button.delete') }}" data-admin-confirm-submit disabled aria-disabled="true">
                                                     <i data-lucide="trash-2" class="w-4 h-4"></i>
                                                 </button>
                                             </form>
@@ -93,4 +110,3 @@
         </div>
     </div>
 @endsection
-

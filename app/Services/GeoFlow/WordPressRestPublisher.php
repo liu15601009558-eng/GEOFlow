@@ -43,9 +43,14 @@ class WordPressRestPublisher implements DistributionPublisherInterface
 
     public function publish(ArticleDistribution $distribution, array $payload): array
     {
+        if ($distribution->wordpressPostId()) {
+            return $this->update($distribution, $payload);
+        }
+
         $distribution->loadMissing('channel');
         $channel = $this->channel($distribution);
         $response = $this->requestFactory->request($channel)
+            ->withHeaders(['Idempotency-Key' => (string) $distribution->idempotency_key])
             ->post($channel->wordpressRestBaseUrl().'/wp/v2/posts', $this->postPayload($channel, $payload));
         $this->throwIfFailed($response, 'WordPress 文章发布');
 
@@ -58,10 +63,11 @@ class WordPressRestPublisher implements DistributionPublisherInterface
         $channel = $this->channel($distribution);
         $postId = $distribution->wordpressPostId();
         if (! $postId) {
-            return $this->publish($distribution, $payload);
+            throw new RuntimeException('WordPress 文章更新缺少远端文章 ID。');
         }
 
         $response = $this->requestFactory->request($channel)
+            ->withHeaders(['Idempotency-Key' => (string) $distribution->idempotency_key])
             ->post($channel->wordpressRestBaseUrl().'/wp/v2/posts/'.$postId, $this->postPayload($channel, $payload));
         $this->throwIfFailed($response, 'WordPress 文章更新');
 
@@ -93,22 +99,72 @@ class WordPressRestPublisher implements DistributionPublisherInterface
         ];
     }
 
-    public function syncSiteSettings(DistributionChannel $channel): array
+    public function syncSiteSettings(DistributionChannel $channel, ?string $idempotencyKey = null, ?array $settings = null): array
     {
-        $settings = $channel->resolvedSiteSettings();
+        $settings ??= $channel->resolvedSiteSettings();
         $payload = [
             'title' => $settings['site_name'],
             'description' => $settings['site_description'],
             'posts_per_page' => $settings['per_page'],
         ];
 
-        $response = $this->requestFactory->request($channel)
+        $request = $this->requestFactory->request($channel);
+        if (is_string($idempotencyKey) && $idempotencyKey !== '') {
+            $request = $request->withHeaders(['Idempotency-Key' => $idempotencyKey]);
+        }
+        $response = $request
             ->post($channel->wordpressRestBaseUrl().'/wp/v2/settings', $payload);
         $this->throwIfFailed($response, 'WordPress 站点设置同步');
 
         return [
             'ok' => true,
             'settings' => $payload,
+        ];
+    }
+
+    /**
+     * @param  array<string,mixed>  $payload
+     * @return array<string,mixed>|null
+     */
+    public function reconcilePublication(ArticleDistribution $distribution, array $payload): ?array
+    {
+        $distribution->loadMissing('channel');
+        $channel = $this->channel($distribution);
+        $article = is_array($payload['article'] ?? null) ? $payload['article'] : [];
+        $slug = trim((string) ($article['slug'] ?? ''));
+        if ($slug === '') {
+            return null;
+        }
+
+        $response = $this->requestFactory->request($channel, 10)
+            ->get($channel->wordpressRestBaseUrl().'/wp/v2/posts', [
+                'slug' => $slug,
+                'context' => 'edit',
+                'per_page' => 2,
+                '_fields' => 'id,link,slug',
+                'status' => ['publish', 'draft', 'pending', 'private', 'future'],
+            ]);
+        if ($response->failed()) {
+            return null;
+        }
+        $posts = $response->json();
+        $matches = collect(is_array($posts) ? $posts : [])
+            ->filter(static fn ($post): bool => is_array($post)
+                && (string) ($post['slug'] ?? '') === $slug
+                && (int) ($post['id'] ?? 0) > 0)
+            ->values();
+        if ($matches->count() !== 1) {
+            return null;
+        }
+        $post = $matches->first();
+
+        return [
+            'remote_id' => (string) $post['id'],
+            'remote_url' => (string) ($post['link'] ?? ''),
+            'remote_meta' => [
+                'wordpress_post_id' => (int) $post['id'],
+                'outcome_reconciled' => true,
+            ],
         ];
     }
 
@@ -162,11 +218,7 @@ class WordPressRestPublisher implements DistributionPublisherInterface
             return;
         }
 
-        $body = html_entity_decode(strip_tags((string) $response->body()), ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        $body = preg_replace('/\s+/', ' ', trim($body));
-        $summary = is_string($body) && mb_strlen($body) > 300 ? mb_substr($body, 0, 300).'...' : (string) $body;
-
-        throw new RuntimeException($operation.'失败：HTTP '.$response->status().($summary !== '' ? ' '.$summary : ''));
+        throw new RuntimeException($operation.'失败：HTTP '.$response->status());
     }
 
     /**
@@ -180,9 +232,12 @@ class WordPressRestPublisher implements DistributionPublisherInterface
         }
 
         $postId = (int) ($json['id'] ?? 0);
+        if ($postId <= 0) {
+            throw new RuntimeException('WordPress 返回内容缺少有效文章 ID。');
+        }
 
         return [
-            'remote_id' => $postId > 0 ? (string) $postId : '',
+            'remote_id' => (string) $postId,
             'remote_url' => (string) ($json['link'] ?? ''),
             'remote_meta' => [
                 'wordpress_post_id' => $postId,

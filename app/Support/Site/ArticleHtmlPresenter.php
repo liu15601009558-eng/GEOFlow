@@ -16,7 +16,7 @@ final class ArticleHtmlPresenter
      */
     public static function markdownToHtml(string $markdown): string
     {
-        $markdown = self::normalizeMarkdownImages(trim($markdown));
+        $markdown = self::prepareMarkdown($markdown);
         if ($markdown === '') {
             return '';
         }
@@ -27,6 +27,12 @@ final class ArticleHtmlPresenter
         ]);
 
         return self::decorateRenderedHtml($converter->convert($markdown)->getContent());
+    }
+
+    /** Shared input semantics for rendering and image selection. */
+    public static function prepareMarkdown(string $markdown): string
+    {
+        return self::normalizeMarkdownImages(trim($markdown));
     }
 
     /**
@@ -53,6 +59,7 @@ final class ArticleHtmlPresenter
         $excerpt = trim((string) $article->excerpt);
         if ($excerpt !== '') {
             $excerpt = self::stripLeadingTitleHeading($excerpt, (string) $article->title);
+            $excerpt = self::stripLeadingMarkdownHeading($excerpt);
             $excerpt = preg_replace('/!\[[^\]]*\]\([^)]+\)/u', '', $excerpt) ?? $excerpt;
             $plain = self::toPlainLine($excerpt);
 
@@ -66,8 +73,21 @@ final class ArticleHtmlPresenter
         return mb_strlen($plain) > $limit ? mb_substr($plain, 0, $limit).'…' : $plain;
     }
 
+    private static function stripLeadingMarkdownHeading(string $content): string
+    {
+        $withoutHeading = preg_replace(
+            '/^\s*#{1,6}[ \t]+[^\r\n]+(?:\r?\n)+/u',
+            '',
+            $content,
+            1
+        ) ?? $content;
+
+        return trim($withoutHeading) !== '' ? $withoutHeading : $content;
+    }
+
     private static function toPlainLine(string $text): string
     {
+        $text = str_replace('&#32;', ' ', $text);
         $text = preg_replace('/[#*_`>\[\]()]/u', ' ', $text) ?? $text;
         $text = preg_replace('/\s+/u', ' ', $text) ?? $text;
 

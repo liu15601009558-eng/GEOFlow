@@ -3,7 +3,12 @@
 namespace App\View\Composers;
 
 use App\Models\Category;
+use App\Models\HostedSiteProfile;
+use App\Services\Site\SiteScopedArticleQuery;
+use App\Services\Site\SiteUrlGenerator;
+use App\Support\Site\CurrentSite;
 use App\Support\Site\SiteSettingsBag;
+use App\Support\Site\SiteThemePreviewContext;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\View\View;
 
@@ -12,6 +17,12 @@ use Illuminate\View\View;
  */
 final class SiteLayoutComposer
 {
+    public function __construct(
+        private readonly SiteScopedArticleQuery $siteArticles,
+        private readonly CurrentSite $currentSite,
+        private readonly SiteUrlGenerator $siteUrls,
+    ) {}
+
     public function compose(View $view): void
     {
         $map = SiteSettingsBag::all();
@@ -19,19 +30,21 @@ final class SiteLayoutComposer
         $siteLogo = (string) ($map['site_logo'] ?? '');
         $siteFavicon = (string) ($map['site_favicon'] ?? '');
         $copyright = (string) ($map['copyright_info'] ?? '');
-        $analyticsCode = (string) ($map['analytics_code'] ?? '');
+        $filingInfo = trim((string) ($map['filing_info'] ?? ''));
+        $filingUrl = trim((string) ($map['filing_url'] ?? ''));
+        $analyticsCode = app(SiteThemePreviewContext::class)->isActive() ? '' : (string) ($map['analytics_code'] ?? '');
 
         $categories = collect();
         if (Schema::hasTable('categories')) {
             $categories = Category::query()
                 ->whereHas('articles', function ($q): void {
-                    $q->published();
+                    $this->siteArticles->apply($q);
                 })
                 ->orderBy('sort_order')
                 ->orderBy('id')
                 ->withCount([
                     'articles as published_count' => function ($q): void {
-                        $q->published();
+                        $this->siteArticles->apply($q);
                     },
                 ])
                 ->get();
@@ -42,8 +55,13 @@ final class SiteLayoutComposer
             'siteLogo' => $siteLogo,
             'siteFavicon' => $siteFavicon,
             'footerCopyright' => $copyright,
+            'footerFilingInfo' => $filingInfo,
+            'footerFilingUrl' => $filingUrl,
             'headAnalyticsCode' => $analyticsCode,
             'navCategories' => $categories,
+            'siteIndexingAllowed' => ! $this->currentSite->isHosted()
+                || $this->currentSite->profile()?->indexing_status === HostedSiteProfile::INDEXING_INDEX,
+            'siteUrls' => $this->siteUrls,
         ]);
     }
 }

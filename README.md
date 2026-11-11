@@ -1,379 +1,289 @@
-# GEOFlow
+# GEOFlow 3.2.1
 
 > Languages: [简体中文](README.md) | [English](docs/readme/README_en.md) | [日本語](docs/readme/README_ja.md) | [Español](docs/readme/README_es.md) | [Русский](docs/readme/README_ru.md) | [Português (BR)](docs/readme/README_pt_BR.md)
 
-> GEOFlow 是一套专门面向 GEO（生成式引擎优化）的开源智能内容工程与多站点分发系统。它把知识库、素材库、提示词、AI 生成任务、审核发布、数据分析、GEOFlow Agent 目标站点包、WordPress REST 渠道和远端静态页面分发串联为一条可持续运营的工作链路，目标是帮助团队把可信资料沉淀为可管理、可发布、可追踪、可同步到多端的 GEO 内容资产。
+## 60 秒了解 GEOFlow
 
-[![PHP](https://img.shields.io/badge/PHP-8.2%2B-blue)](https://www.php.net/)
-[![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL-336791)](https://www.postgresql.org/)
-[![Docker](https://img.shields.io/badge/Docker-Compose-blue)](https://docs.docker.com/compose/)
-[![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+从可信知识到 AI 内容生产、质量门禁、人工审核与多站点分发，60 秒看懂企业官网的 GEO 运营流程。
+
+https://github.com/user-attachments/assets/8dbbf34e-e9c1-4139-977a-8e78394e34d9
+
+*中文介绍 · 60 秒*
+
+---
+
+> 面向企业官网的开源 GEO 智能运营系统
+
+GEOFlow 把企业知识导入、AI 文章与专题生产、智能配图、质量门禁、人工审核、多站点分发和 AI 可见性分析接进一条运营链路。品牌、增长和内容团队可以用它建设企业官网、GEO 子频道、行业信源站或内部内容运营平台，在同一套后台管理资料来源、内容版本、发布结果和运营数据。
+
+[快速开始](#快速开始) · [界面预览](#界面预览) · [核心能力](#geoflow-321-核心能力) · [文档中心](docs/README.md) · [3.0 升级教程](docs/deployment/GEOFLOW_V3_UPGRADE.md) · [蓝绿部署与自动迁移](docs/blue-green-deployment-usage.md) · [更新日志](docs/CHANGELOG.md) · [官方网站](https://www.geoflow.me)
+
+[![Source version](https://img.shields.io/badge/source-3.2.1-2563eb)](version.json)
+[![Latest release](https://img.shields.io/github/v/release/yaojingang/GEOFlow?display_name=tag)](https://github.com/yaojingang/GEOFlow/releases/latest)
+[![PHP](https://img.shields.io/badge/PHP-8.3%2B-777bb4)](https://www.php.net/)
+[![CI](https://github.com/yaojingang/GEOFlow/actions/workflows/ci.yml/badge.svg)](https://github.com/yaojingang/GEOFlow/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/yaojingang/GEOFlow?style=social)](https://github.com/yaojingang/GEOFlow/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/yaojingang/GEOFlow?style=social)](https://github.com/yaojingang/GEOFlow/network/members)
-[![GitHub issues](https://img.shields.io/github/issues/yaojingang/GEOFlow)](https://github.com/yaojingang/GEOFlow/issues)
 
-GEOFlow 以 [Apache License 2.0](LICENSE) 开源发布。你可以自由使用、复制、修改和分发本项目，包括商业使用；请保留版权声明和许可证文本，并遵守 Apache-2.0 的专利授权、商标与免责声明条款。
+> **版本说明：** 当前源码版本为正式版 `3.2.1`。精确版本见 [`version.json`](version.json)，发布包与对应升级说明见 [GitHub Releases](https://github.com/yaojingang/GEOFlow/releases)。`main` 持续接收后续更新，部署时请固定 Release 标签或经过审核的提交。
 
 ---
 
-## ✨ 你可以用它做什么
+## GEOFlow 解决什么问题
 
-| 特性 | 说明 |
-|------|------|
-| 🤖 多模型内容生成 | 兼容 OpenAI 风格接口和 Gemini 原生接口，支持 chat / embedding 模型、Provider URL 自动适配、智能模型切换、失败重试和调用统计 |
-| 🧠 知识库与 RAG | 知识库上传后支持结构化规则切片、可选 LLM 语义规划和稳定回退；配置 embedding 模型后写入向量，在文章生成时召回相关资料 |
-| 🗂 素材与提示词体系 | 标题库、关键词库、图片库、作者库、知识库、正文提示词、特殊提示词集中管理 |
-| 📦 任务自动化 | 支持任务创建、生成数量、草稿池、审核开关、发布节奏、队列执行、失败重试、发布范围控制和任务文章筛选 |
-| 📋 审核与文章管理 | 草稿、审核、发布、回收站、作者、分类、SEO 字段和任务来源统一管理 |
-| 📡 多站点分发管理 | 支持 GEOFlow Agent 与 WordPress REST 渠道、密钥管理、目标站点包、静态模式、伪静态规则、远端文章编辑/删除和队列日志 |
-| 🧾 目标站点包 | 为每个渠道生成预配置 PHP Agent 包，内置首页、详情页、静态资源、sitemap、`llms.txt` / TXT 地图和 Schema |
-| 📊 数据分析 | 集中展示系统总览、单站内容运营、多站分发、访问日志、Top 内容、AI 爬虫识别和趋势图 |
-| 🔍 SEO 与 LLM 抓取友好输出 | 文章 SEO 元信息、Open Graph、Schema、GFM Markdown、独立 CSS、图片同步、sitemap 和 TXT 地图 |
-| 🎨 前台与主题 | 默认主题、主题包、预览路径、后台主题切换；GEOFlow Agent 渠道可同步站点标题、版权、主题和分类设置 |
-| 🌍 后台多语言 | 后台支持中文、英文、日语、西班牙语、俄语、葡萄牙语（巴西）切换，并覆盖 2.0 新模块 |
-| 🔔 版本提醒 | 后台可按 `version.json` 检查 GitHub 新版本，并在有新版本时提醒管理员 |
-| 🐳 可直接部署 | **Docker Compose** 一键拉起 PostgreSQL（pgvector）、Redis、应用、队列、调度、Reverb 和生产 Nginx/php-fpm |
+企业开展 GEO 运营时，通常需要同时管理品牌知识、模型、内容生产、质量审核、官网工程、渠道发布和效果分析。工具分散会让资料来源、审核结论和发布结果难以追踪。
+
+GEOFlow 把这些工作放进同一个管理后台：
+
+```mermaid
+flowchart LR
+    A[可信知识与素材] --> B[AI 内容生产]
+    B --> C[AI 质检门禁]
+    C --> D[人工审核]
+    D --> E1[企业官网]
+    D --> E2[托管站点与分发渠道]
+    D --> E3[人工发布与 Chrome 协作]
+    E1 --> F[访问与 AI 可见度分析]
+    E2 --> F
+    E3 --> F
+    F -. 运营反馈 .-> A
+```
+
+系统保留知识来源、任务配置、模型调用、质检证据、人工放行、发布状态和渠道日志，方便团队持续复盘和维护内容资产。
 
 ---
 
-## 🖼 界面预览
+## 界面预览
 
 <table>
   <tr>
-    <td width="34%" rowspan="3"><img src="docs/images/screenshots/analytics.png" alt="GEOFlow 中文数据分析" /><br /><sub>数据分析</sub></td>
-    <td width="33%" rowspan="2"><img src="docs/images/screenshots/site-settings.png" alt="GEOFlow 中文网站设置" /><br /><sub>网站设置</sub></td>
-    <td width="33%"><img src="docs/images/screenshots/home.png" alt="GEOFlow 中文后台首页" /><br /><sub>后台首页</sub></td>
+    <td width="50%"><img src="resources/knowledge/ai-workspace/media/01-ai-workspace-start.webp" alt="GEOFlow Admin UI V3 图文帮助工作台" /><br /><sub>图文帮助工作台</sub></td>
+    <td width="50%"><img src="resources/knowledge/ai-workspace/media/03-analytics-overview.webp" alt="GEOFlow Admin UI V3 数据中心" /><br /><sub>数据中心</sub></td>
   </tr>
   <tr>
-    <td width="33%"><img src="docs/images/screenshots/task-management.png" alt="GEOFlow 中文任务管理" /><br /><sub>任务管理</sub></td>
+    <td width="50%"><img src="resources/knowledge/ai-workspace/media/05-task-list.webp" alt="GEOFlow Admin UI V3 任务管理" /><br /><sub>任务管理</sub></td>
+    <td width="50%"><img src="resources/knowledge/ai-workspace/media/10-article-quality.webp" alt="GEOFlow Admin UI V3 文章 AI 质检" /><br /><sub>文章 AI 质检</sub></td>
   </tr>
   <tr>
-    <td width="33%"><img src="docs/images/screenshots/ai-config.png" alt="GEOFlow 中文 AI 模型配置" /><br /><sub>AI 模型配置</sub></td>
-    <td width="33%"><img src="docs/images/screenshots/materials.png" alt="GEOFlow 中文素材管理" /><br /><sub>素材管理</sub></td>
+    <td width="50%"><img src="resources/knowledge/ai-workspace/media/19-hosted-sites.webp" alt="GEOFlow Admin UI V3 托管渠道站点" /><br /><sub>托管渠道站点</sub></td>
+    <td width="50%"><img src="resources/knowledge/ai-workspace/media/20-manual-publication.webp" alt="GEOFlow Admin UI V3 人工发布工作台" /><br /><sub>人工发布工作台</sub></td>
   </tr>
 </table>
 
-上述页面覆盖后台首页、数据分析、任务调度、素材库、模型配置与网站设置等主链路；更多后台说明见 `docs/`。
+这些脱敏界面来自 3.0 内置帮助素材，覆盖知识问答、任务调度、文章质检、托管站点、人工发布和数据分析等主要流程。
 
 ---
 
-## 🆕 新版本重点
+## GEOFlow 3.2.1 核心能力
 
-GEOFlow 2.0 重点变化包括：
+| 能力 | 当前提供的工作方式 |
+|------|-------------------|
+| 可信知识与内容生产 | 导入 TXT、Markdown、DOCX、PDF 和 PPTX，管理知识库、标题、关键词、图片、作者、提示词和模型；支持向量检索、图片库智能配图及提示词实时测试 |
+| AI 质量门禁 | 按知识证据、数据与引文、广告规则和发布语境检查文章，记录评分、原文定位、修改建议及历史结果；支持自动优化、按分数放行和人工审核 |
+| 专题管理与持续维护 | 将已有文章组织为专题，支持 AI 生成、选文分组、审核发布和定期维护，提供标准卡片、阅读指南和时间汇总三种阅读布局 |
+| 审核与运营协作 | 管理草稿、发布、回收站和批量导出；平台网页渠道将头条号、搜狐号和网易号分发转为人工工单，通过 Chrome 运营助手领取并提交回执 |
+| 企业官网与多站点交付 | 输出 SEO 元信息、Open Graph、Schema、抓取发现文件和规范链接；支持模板包、短视频、托管站点、GEOFlow Agent、WordPress REST 和通用 HTTP API |
+| 链接池与推荐投放 | 为主站与第一方托管站管理内链和经健康检查的外部链接，按分类、关键词和活动规则投放推荐，查看输出、可见和点击数据 |
+| AI 可见性与日常运维 | 分析关键词采样、专题、信源、竞品、词云、访问及 AI 爬虫；独立 Updater 负责签名更新、完整备份、环境验收和恢复点回滚 |
+| 团队与开发者入口 | Admin UI V3 支持六种语言、响应式布局、PWA 和图文帮助；API v1、CLI 与 Agent Skill 提供现有内容管理自动化、远程主题草稿和签名预览 |
 
-- **后台首页改为运营导航**：保留三步上手引导，并按单站点运营、多站点分发和配套 skill 资源组织入口。
-- **Gemini 与 OpenAI-compatible 接入更完整**：AI 模型配置同时覆盖 OpenAI 风格 Provider 与 Gemini 原生 chat / embedding 路径。
-- **知识库支持语义切片规划**：提供结构化规则切片、自动策略和可选 LLM 语义规划，LLM 只规划边界，最终切片仍从原文稳定重建。
-- **数据分析独立成页**：系统总览、内容运营、任务健康、素材健康、分发状态、访问日志和 AI 爬虫趋势集中到 `/admin/analytics`。
-- **分发管理进入可运行闭环**：支持 GEOFlow Agent 和 WordPress REST 渠道新建、密钥管理、测试连接、目标站点包下载、静态/伪静态模式、远端设置同步、队列、日志、远端文章编辑与删除。
-- **任务发布范围更清晰**：任务可选择“本地和渠道站点同时发布”“仅发布到渠道站点”“仅发布到本站”，仅本站模式会禁用渠道选择并避免进入远程分发队列。
-- **目标渠道站点支持静态页面**：文章分发后生成远端首页、详情页、sitemap、TXT 地图和 `llms.txt`，并同步图片与独立 CSS。
-- **素材与 RAG 更完整**：知识库切片、向量化状态、标题库、关键词库、图片库、作者和提示词体系形成任务生产输入。
-- **部署与安全增强**：生产 Docker 使用 Nginx + PHP-FPM，默认管理员 seed 不覆盖已有账号，Docker 镜像和 Composer 镜像可配置。
-- **多语言覆盖补齐**：后台语言包覆盖 2.0 新增模块，减少界面中出现裸翻译 key 或英文兜底。
+部署并完成基础站点设置后，主站和托管站会自动提供 `/robots.txt`、`/sitemap.xml`、`/sitemap.txt` 和 `/llms.txt`。这些地址按当前站点、发布状态、索引开关、规范化文章链接和站点设置实时生成；GEOFlow Agent 目标站点包在安装时提供这四个地址，并在文章发布、删除和站点设置同步时自动刷新 XML 与文本地图及 `llms.txt`。页面的标题、描述、规范链接、Open Graph 和 JSON-LD 继续由公共前台层统一输出。
 
----
+`robots.txt` 会自动限制后台、API、运行时调试、上传存储、搜索参数和图片文件的抓取，并拒绝 Facebook 分享抓取器；这些规则只管理爬虫访问意向，敏感数据仍须使用认证、授权和服务器访问控制保护。
 
-## 🏗 运行结构
+### 3.2.1 汇总的近期更新
 
-```
-后台管理页面
-    ↓
-AI 配置 / 素材库 / 提示词 / 任务配置
-    ↓
-调度器 / 队列 / Worker 执行 AI 生成
-    ↓
-草稿 / 审核 / 发布
-    ↓
-本地前台文章与 SEO 页面
-    ↓
-分发队列 / 目标站点 Agent
-    ↓
-远端静态首页、详情页、sitemap、TXT 地图与 llms.txt
-```
+- 专题管理与 AI 专题任务：支持文章二次组合、分组排序、批量创建、审核发布和定期维护，并接入首页、导航、文章回链与 Sitemap。
+- 链接池：支持链接导入预检、推荐活动、站点开关、主题适配与回滚，以及推荐输出、读者可见和点击统计。
+- 提示词实时测试：直接测试未保存草稿，结合知识库与选题流式生成正文，支持停止运行和带原文定位的 AI 诊断。
+- 知识导入：知识库与企业知识新增 PDF、PPTX 文本提取，保留 TXT、Markdown 和 DOCX 支持；扫描件与纯图片文档需先完成 OCR。
+- 智能配图：模型根据图片库备注和标签选择正文配图，按任务数量限制输出；未选图时使用间隔插入作为回退。
+- 平台人工辅助发布：头条号、搜狐号和网易号通过人工工单、Chrome 运营助手及结果回执完成分发，最终发布由运营人员确认。
+- AI 可见性：增加专题归类、信源与竞品证据、词云清洗，以及近 7 天成功采样标记和手动重采。
+- 模板与前台：提供精选、我的模板和归档分区，支持经校验的短视频；模板包默认兼容 3.x，继续校验作者声明的最低版本和功能依赖。
+- 发布与运行修复：完善文章批量操作、AI 评分放行和自动发布，修复火山方舟多模态向量接入，增加按主机启用的出站代理并更新安全依赖。
+
+功能使用说明见[链接池与提示词测试](docs/operations/link-pool-and-prompt-test.md)、[知识文档导入](docs/knowledge-import.md)、[平台人工辅助发布](docs/distribution/platform-web-assisted-publishing.md)及 [AI 可见性](docs/ai-visibility-operations.md)。CLI 和 Skill 继续使用各自的预览版本，远程主题发布与回滚的当前范围见[远程管理说明](docs/api/remote-management-preview.md)。
+
+完整变更见 [中文更新日志](docs/CHANGELOG.md) 和 [English changelog](docs/CHANGELOG_en.md)。
 
 ---
 
-## 🧱 系统架构
+## 适用场景
 
-| 层级 | 说明 |
+| 场景 | 建议用法 | 重点能力 |
+|------|----------|----------|
+| 企业官网 GEO 运营 | 围绕产品、案例、FAQ、行业知识和品牌规则持续建设内容 | 企业知识库、任务、质检、官网发布、数据分析 |
+| 官网 GEO 子频道 | 通过子域名或独立目录快速建立资讯、知识或解决方案频道 | 主题、栏目、SEO、内容调度、线索表单 |
+| 行业信源站 | 围绕一个行业、主题或问题域维护可核验的长期内容资产 | RAG、审核、引用友好输出、sitemap、`llms.txt` |
+| 内部内容运营平台 | 弱化公开前台，由品牌、增长和内容团队统一生产与审核 | 素材库、API、CLI、人工发布、权限和审计 |
+| 多品牌与多站点 | 从一套后台管理多个站点、栏目或内容出口 | 托管站点、Agent、WordPress、通用 API、分发日志 |
+
+GEOFlow 适合拥有真实业务资料、明确审核责任和持续运营计划的团队。知识库质量、人工判断和长期维护决定内容能否稳定获得用户与 AI 的信任。
+
+---
+
+## 安全与治理
+
+| 范围 | 设计边界 |
+|------|----------|
+| 内容质量 | 知识证据、规则版本、评分、人工放行和结果过期均可追踪 |
+| 账号与权限 | 管理入口按权限过滤，敏感操作由超级管理员控制，任务和人工发布保留状态历史 |
+| 浏览器协作 | Chrome 扩展使用设备配对与最小权限 Token，不保存外部平台密码、Cookie 或 OAuth 凭证 |
+| 出站请求 | URL 导入、分发、AI、主题参考和更新检查经过统一安全策略，限制私网访问、重定向和响应体大小 |
+| 更新与恢复 | Updater 使用签名包、本地 Unix socket、环境验收、完整备份和恢复点，高风险请求要求二次验证 |
+| 匿名统计 | 默认关闭；启用后只发送固定白名单字段，业务内容、账号、邮箱、域名、Cookie 和密钥不会进入载荷 |
+
+安全设计、部署门禁和升级步骤以 [部署文档](docs/deployment/DEPLOYMENT.md) 与当前版本发布说明为准。
+
+---
+
+## 组件与运行环境
+
+| 组件 | 当前源码版本或状态 | 说明 |
+|------|-------------------|------|
+| GEOFlow Core | `3.2.1` | Laravel 应用、管理后台、前台、API、队列和分发系统 |
+| GEOFlow CLI | `0.4.0-preview.2` | 内置命令与独立 PHAR 预览版；远程草稿可用，主题发布尚未开放 |
+| Chrome 运营助手 | `0.1.0` | 源码和打包产物位于 `browser-extension/` 与 `dist/browser-extension/` |
+| GEOFlow Updater | 独立组件 | 使用与目标 Release 明确兼容的签名版本，参见 [geoflow-updater](https://github.com/yaojingang/geoflow-updater) |
+| 目标站点 Agent | 按渠道生成 | 每个渠道可生成预配置 PHP 包，提供首页、详情页、静态资源、Schema、sitemap 和 `llms.txt` |
+
+运行要求：
+
+| 组件 | 要求 |
 |------|------|
-| Web / Admin | **Laravel** 路由与控制器；前台文章站点、**Blade** 后台、数据分析、分发管理、素材与任务入口 |
-| API / Agent | 本地 API 与目标站点 PHP Agent；负责分发健康检查、文章接收、远端设置同步和静态文件生成 |
-| Scheduler / Queue / Reverb | **Laravel Scheduler** 扫描与入队；**`queue:work` / Horizon** 消费生成与分发任务；**Reverb** 按需启用 |
-| Domain & Jobs | `app/Services`、`app/Jobs`、`app/Http/Controllers` 等承载 AI 生成、RAG、发布、分发和日志分析规则 |
-| Persistence | **PostgreSQL**（推荐 **pgvector** 镜像与线上实例一致）+ **Redis**（队列/缓存等）+ 目标站点本地 JSON/静态文件 |
-
-核心链路：
-
-1. 在后台配置模型、提示词与素材库
-2. 准备知识库、标题库、关键词库、图片库和作者库，按需要选择知识库切片策略
-3. 创建任务并进入调度与队列
-4. Worker（队列进程）调用模型生成正文与元数据
-5. 文章进入草稿、审核、发布链路
-6. 本地前台输出文章与 SEO 页面
-7. 如选择分发渠道，文章进入分发队列并同步到 GEOFlow Agent 或 WordPress 目标站点
-8. 数据分析页持续查看内容生产、分发状态、访问日志和 AI 爬虫趋势
+| PHP | 8.3 及以上，Docker 默认可使用 PHP 8.4 |
+| 数据库 | PostgreSQL，推荐使用 pgvector 镜像或兼容扩展 |
+| Redis | 用于队列、缓存和运行状态 |
+| Node.js | 用于前端资源构建，CI 使用 Node.js 22 |
+| 容器部署 | Docker Compose，生产使用 Nginx 与 php-fpm |
 
 ---
 
-## ⚡ 后台三步上手
+## 快速开始
 
-登录后台后，建议按仪表盘里的「快速开始」完成第一轮验证：
-
-1. **配置 API**：至少添加一个可用 chat 模型；如果需要知识库 RAG 召回，再添加一个 embedding 模型，并选择适合的知识库切片策略。
-2. **配置素材库**：准备知识库、标题库、关键词库、图片库和作者。知识库建议先用真实、可验证的业务资料。
-3. **新建任务**：选择标题库、素材、模型、生成数量、发布频率和发布范围，先让文章进入草稿或审核流程，再逐步开启自动发布与多站点分发。
-
----
-
-## 🎯 适用场景与目标收益
-
-GEOFlow 适合这些真实且可落地的场景：
-
-- **独立 GEO 官网**
-  把官网内容、产品资料、FAQ、案例和品牌知识组织成一个可持续更新的内容系统。目标是提升 AI 搜索可见度、品牌信源覆盖和内容运营效率，而不是堆砌低质量页面。
-- **官网中的 GEO 子频道**
-  在现有官网下搭建一个独立的资讯、知识或解决方案频道。目标是让品牌内容更结构化、更适合搜索引用，也方便不同团队协同更新。
-- **独立 GEO 信源站点**
-  面向某个行业、主题或问题域，持续沉淀高质量文章、榜单、解读、指南和资料。目标是构建稳定可信的外部内容资产，而不是做信息污染。
-- **GEO 内容管理系统**
-  作为内部内容生产后台，统一管理模型、素材、标题、图片、知识库、审核和发布。目标是提升团队提效、降低重复劳动、减少分散工具切换。
-- **GEO 多站点 / 多栏目部署**
-  用同一套系统管理多个站点、多个栏目或多个主题模板。目标是让内容生产、模板切换、分发和维护更标准化。
-- **自动化信源管理与内容分发**
-  对知识库、专题内容、资讯更新和内容分发流程进行工程化管理。目标是让真正有价值的信息更稳定地被用户和 AI 理解、引用和检索。
-
-这套系统的收益，应该建立在**真实、优质、持续维护的知识库**之上。
-我们不鼓励利用系统制造信息噪音、批量污染互联网或堆积虚假内容。GEOFlow 的本质是帮助团队更高效地管理、生产和分发可信内容，提升 AI 营销效率和 GEO 运营效率，而不是替代事实、替代判断或替代内容质量本身。
-
----
-
-## 🧭 场景对应的部署与使用方式
-
-不同场景下，建议这样使用 GEOFlow：
-
-- **作为独立 GEO 官网运行**
-  直接部署完整前台与后台，围绕官网栏目、产品页延展内容、FAQ、案例和专题进行运营。适合希望把官网做成 AI 搜索友好型内容资产的团队。
-- **作为官网中的 GEO 子频道运行**
-  将 GEOFlow 作为一个相对独立的内容频道部署，再通过导航、子域名或目录与主站打通。适合不想重构主站、但需要快速上线内容频道的团队。
-- **作为 GEO 信源站运行**
-  单独维护一个面向特定主题的内容站点，把知识库和资料建设放在首位，再通过任务系统做稳定更新。适合想做行业型、专题型或问题导向型内容资产的团队。
-- **作为内部 GEO 内容管理后台运行**
-  把前台弱化，重点使用后台的模型配置、素材库、任务调度、审核发布与 API 能力。适合内容团队、增长团队、品牌团队做内部生产系统。
-- **作为多站点 / 多频道系统运行**
-  使用不同模板、栏目、域名或部署实例，管理多个内容出口。适合需要同时维护多个品牌频道、多个主题站或多个实验站点的团队。
-- **作为自动化信源管理系统运行**
-  重点建设知识库、标题库、图片库和提示词体系，把系统当作一个内容工程与分发操作台。适合希望长期沉淀可信知识资产、再逐步扩展自动化能力的团队。
-
-建议的使用顺序是：
-
-1. 先确定真实的业务目标和目标读者
-2. 先建设知识库，再建设自动化流程
-3. 先确保内容真实、可核验、可维护
-4. 再用模型、任务和模板能力去提效
-
-如果知识库本身不真实、不完整、不稳定，再强的自动化也只会放大噪音。
-所以在 GEOFlow 里，**知识库建设应该始终排在最前面**。
-
----
-
-## 🚀 快速开始
-
-### 方式一：Docker（开发 / 演示）
+### Docker 开发与体验
 
 ```bash
-# 1. 克隆仓库
 git clone https://github.com/yaojingang/GEOFlow.git
 cd GEOFlow
-
-# 2. 复制环境变量
 cp .env.example .env
-
-# 3. 按需编辑 .env（数据库、Redis、APP_URL、ADMIN_BASE_PATH、REVERB_* 等）
-vi .env
-
-# 4. 构建并启动（含 postgres、redis、init、app、queue、scheduler、reverb）
 docker compose build
-docker compose up -d
+docker compose up -d --remove-orphans
 ```
 
-- 前台默认访问：`http://localhost:18080`（端口由环境变量 **`APP_PORT`** 控制，默认 `18080`）
-- 后台登录：`http://localhost:18080/geo_admin/login`（前缀由 **`ADMIN_BASE_PATH`** 控制，默认 `geo_admin`）
+- 前台默认地址：`http://localhost:18080`
+- 后台默认地址：`http://localhost:18080/geo_admin/login`
+- 端口由 `APP_PORT` 控制，后台前缀由 `ADMIN_BASE_PATH` 控制
+- 首次启动由 `init` 服务完成数据库迁移和空库安装
 
-首次启动会运行 **`init`** 容器：在数据库就绪后执行首次迁移与种子（默认管理员见下文「默认管理员」）。
+开发环境的默认管理员配置见 [部署文档](docs/deployment/DEPLOYMENT.md)。生产环境应显式设置管理员密码、HTTPS、Cookie 安全策略和反向代理配置。
 
-### 方式一补充：Docker（生产）
+### Docker 生产部署
 
-生产环境建议使用 **`docker-compose.prod.yml`**，改为 **`Nginx + php-fpm`**，而不是 `php artisan serve`。
-
-如果希望在常见云服务器上自动完成环境自检、Docker 检测、`.env.prod` 生成、容器部署和部署后健康检查，可以使用参考部署脚本：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/yaojingang/GEOFlow/main/deploy-scripts/geoflow-docker-deploy.sh -o geoflow-docker-deploy.sh
-bash geoflow-docker-deploy.sh
-```
-
-脚本说明见 [`deploy-scripts/README.md`](deploy-scripts/README.md)。
+生产环境使用 `docker-compose.prod.yml`，由 Nginx 和 php-fpm 提供 Web 服务。部署前请准备 `.env.prod`、数据库备份策略、HTTPS、持久化目录和运行进程管理：
 
 ```bash
 cp .env.prod.example .env.prod
-vi .env.prod
 
 docker compose --env-file .env.prod -f docker-compose.prod.yml build
 docker compose --env-file .env.prod -f docker-compose.prod.yml up -d postgres redis
 docker compose --env-file .env.prod -f docker-compose.prod.yml up -d init
-docker compose --env-file .env.prod -f docker-compose.prod.yml up -d app web queue scheduler reverb
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --remove-orphans app web queue ai-quality-queue ai-quality-backfill-queue ai-optimization-queue knowledge-queue scheduler reverb
 ```
 
-- 前台 / 后台统一经 `web`（Nginx）访问
-- PHP 由 `app`（php-fpm）解析
-- **默认管理员**：生产 `init` 服务会在迁移后执行一次 `db:seed`，只在目标用户名不存在时写入默认后台账号；重复执行不会覆盖已有账号或密码
-- 详细说明见 `docs/deployment/DEPLOYMENT.md`
+完整的生产部署、健康检查、反向代理和故障恢复说明见 [`docs/deployment/DEPLOYMENT.md`](docs/deployment/DEPLOYMENT.md)。
 
-### 方式二：本地 PHP 服务器
+### 从 2.x 升级
 
-**前置要求：** PHP **8.2+**，启用 `pdo_pgsql`、`redis` 等 Laravel 常用扩展；本机已安装 **PostgreSQL** 与 **Redis**；已安装 **Composer 2.x**。
+升级前需要备份数据库、`.env`、上传目录和 `storage`，随后停机排空旧进程，执行迁移、前端构建和运行进程重启。早期 2.x 版本还需完成受管图片 readiness 与安全审计。托管站点应在泛 DNS、通配符 TLS、可信代理和 Nginx 配置完成后启用。
 
-```bash
-# 1. 克隆仓库
-git clone https://github.com/yaojingang/GEOFlow.git
-cd GEOFlow
+已有部署请完整执行 [停机排空与安全迁移协议](docs/deployment/DEPLOYMENT.md)，避免直接运行 `git pull` 后重建容器。正式版本的精确升级命令和组件兼容关系以对应 GitHub Release 为准。
 
-# 2. 环境与依赖
-cp .env.example .env
-# 编辑 .env：将 DB_HOST/DB_* 指向本机 Postgres，REDIS_* 指向本机 Redis，QUEUE_CONNECTION=redis 等
-
-composer install --no-interaction --prefer-dist
-php artisan key:generate
-
-# 3. 数据库与存储
-php artisan migrate --force
-php artisan db:seed --force    # 可选：写入默认管理员等
-php artisan storage:link
-
-# 4. 开发用 HTTP（仅本地调试；生产请用 Nginx + PHP-FPM，站点根目录 public/）
-php artisan serve --host=127.0.0.1 --port=8080
-```
-
-另开终端启动常驻进程（与 Docker 中 `queue` / `scheduler` / `reverb` 对应）：
-
-```bash
-php artisan queue:work redis --queue=geoflow,distribution,default --sleep=1 --tries=1 --timeout=300
-php artisan schedule:work
-php artisan reverb:start
-```
-
-- 后台：`http://127.0.0.1:8080/geo_admin/login`（若修改了 `ADMIN_BASE_PATH` 请替换路径）
-- 生产可用 `php artisan horizon` 替代 `queue:work`（需按项目配置托管进程）
+逐步操作见 [3.0 升级教程](docs/deployment/GEOFLOW_V3_UPGRADE.md)，包含普通 Docker 部署与已接入 Updater 的两种路径、备份、数据回填、验收和恢复说明；也可从 [Wiki](https://github.com/yaojingang/GEOFlow/wiki/v3.0.0-升级教程) 阅读。
 
 ---
 
-## 环境要求（部署检查清单）
+## 开发者入口
 
-| 组件 | 说明 |
-|------|------|
-| PHP | **8.2+**（Docker 镜像可为 8.4） |
-| 扩展 | Laravel 常规扩展；PostgreSQL 需 `pdo_pgsql`；Redis 队列需 `redis` |
-| Composer | 2.x |
-| 数据库 | **PostgreSQL**（推荐 **pgvector**，与 `docker-compose.yml` 中镜像一致） |
-| Redis | 队列、缓存等（本地极简调试可将 `QUEUE_CONNECTION` 改为 `sync`，生产不推荐） |
+### GEOFlow CLI
 
----
+`bin/geoflow` 通过 API v1 管理目录、任务、执行记录、素材和文章，支持安全配置、登录、JSON 文件或 stdin、删除确认和结构化错误。
 
-## 源码部署补充说明
+[CLI 中文文档](docs/GEOFLOW_CLI.md) | [CLI English guide](docs/GEOFLOW_CLI_en.md)
 
-**目录权限（Linux / macOS 常见）：**
+### GEOFlow Agent Skill
 
-```bash
-chmod -R ug+rwx storage bootstrap/cache
-```
+仓库内置统一的 [GEOFlow Agent Skill](.agents/skills/geoflow/)，覆盖 Laravel 开发、后台运营、网站前台、主题模板、渠道站点和旧版迁移。支持 Agent Skills 的工具打开仓库后可以直接发现它；Codex 用户可通过 `$geoflow` 调用。
 
-**默认管理员（执行 `php artisan db:seed` 后，以 `Database\\Seeders\\AdminUserSeeder` 为准）：**
+安装与回滚说明见 [Skill README](.agents/skills/geoflow/README.md)。
 
-| 字段 | 值 |
-|------|-----|
-| 用户名 | `GEOFLOW_ADMIN_USERNAME`，默认 `admin` |
-| 密码 | 本地开发默认 `password`；生产环境请设置 `GEOFLOW_ADMIN_PASSWORD`。若生产环境留空且账号尚不存在，seed 会生成一次性随机密码并输出到初始化日志 |
-
-补充规则：`AdminUserSeeder` 只在目标用户名不存在时创建账号；重复执行不会覆盖已有用户名、邮箱或密码。若账号已存在，即使生产环境 `GEOFLOW_ADMIN_PASSWORD` 为空，也不会重新生成或打印密码。
-
-### 管理员登录失败锁定与手动解锁
-
-- 后台账号连续登录失败 **5 次** 会自动锁定（`status=locked`）。
-- 被锁定账号无法继续登录，需管理员手动解锁。
-- 解锁命令：
+### 开发与测试
 
 ```bash
-php artisan geoflow:admin-unlock <username>
-```
-
-例如：
-
-```bash
-php artisan geoflow:admin-unlock admin
-```
-
-**生产环境 Web：** 使用 Nginx / Apache + **PHP-FPM**，网站根目录指向项目 **`public/`**，勿将仓库根目录直接暴露为文档根。
-
----
-
-## Docker 部署补充说明
-
-### 开发 Compose 服务一览
-
-| 服务 | 作用 |
-|------|------|
-| `postgres` | PostgreSQL 16 + pgvector |
-| `redis` | Redis 7 |
-| `init` | 一次性初始化（`restart: "no"`） |
-| `app` | `php artisan serve`，映射 **`${APP_PORT:-18080}:8080`** |
-| `queue` | `queue:work redis` |
-| `scheduler` | `schedule:work` |
-| `reverb` | WebSocket，映射 **`${REVERB_EXPOSE_PORT:-18081}:8080`** |
-
-宿主机仅绑定 **127.0.0.1** 暴露数据库 / Redis 端口时，见 `docker-compose.yml` 中的 `DB_EXPOSE_PORT`、`REDIS_EXPOSE_PORT`。
-
-### 入口脚本（`docker/entrypoint.sh`）常用变量
-
-| 变量 | 默认 | 含义 |
-|------|------|------|
-| `COMPOSER_ON_START` | `true` | 容器启动时执行 `composer install` |
-| `AUTO_MIGRATE` | `true` | 每次启动执行 `php artisan migrate --force` |
-| `AUTO_INIT_ONCE` | 仅 `init` 为 `true` | 新库时执行一次 `migrate` + `db:seed` |
-| `AUTO_GENERATE_APP_KEY` | `init` 内为 `true` | 无有效 `APP_KEY` 时自动生成 |
-| `AUTO_SEED` | `false` | 为 `true` 时**每次**启动都 `db:seed`（慎用） |
-
-Compose 将 **`./storage`** 与 **`./.env`** 挂载进容器；应用代码在镜像内。若要用于正式生产，请改用仓库新增的 **`docker-compose.prod.yml`**（`Nginx + php-fpm`），并参见 `docs/deployment/DEPLOYMENT.md`。
-
-**升级建议：** `git pull` → `docker compose build` → `docker compose up -d`。
-
----
-
-## 开发与测试
-
-```bash
+composer install
+npm ci
+npm run build
 composer test
-./vendor/bin/pint
+npm run test:analytics
+vendor/bin/pint --test
 ```
+
+贡献代码前请阅读 [贡献指南](CONTRIBUTING.md)。
 
 ---
 
-## 🌍 多语言文档
+## 开源协议与商业授权
+
+GEOFlow 当前版本采用 [GNU Affero General Public License v3.0](LICENSE)。此前按 Apache-2.0 发布的版本继续适用原许可证，历史文本保存在 [`docs/licenses/Apache-2.0.txt`](docs/licenses/Apache-2.0.txt)。
+
+**个人和企业均可免费使用 GEOFlow 开源版，也可以用于商业用途。** 在遵守 AGPL-3.0 的前提下，下列场景无需另购 GEOFlow 商业许可；公司内部使用、为客户提供服务或对服务收费，本身都不会产生购买商业许可的要求。
+
+| 使用场景 | 授权说明 |
+|----------|----------|
+| 个人学习、研究、教学、功能评估与测试 | 可免费使用、部署和修改 |
+| 公司内部知识管理、内容生产、AI 质检与团队协作 | 可免费部署供员工使用，营利性企业同样适用 |
+| 运营自己的企业官网、品牌站、GEO 子频道或行业信源站 | 可免费使用，支持商业运营 |
+| 代理公司、工作室或咨询团队为客户提供内容生产与代运营服务 | 可免费使用，也可以收取内容制作、咨询和运营服务费 |
+| 为客户提供部署、培训、维护或二次开发交付 | 可免费使用并收取服务费；交付软件副本时需履行适用的 AGPL 分发与源码提供义务 |
+| 基于 GEOFlow 提供托管服务或在线服务（SaaS） | 可免费使用并对服务收费；修改版通过网络提供服务时，需向交互用户提供完整对应源码的免费获取方式 |
+| 二次开发、再分发，以及遵守 AGPL 的品牌定制或 OEM 交付 | 可免费使用；需保留必要声明并履行适用的同许可证与源码提供义务，商标权需另行确认 |
+| 需要豁免 AGPL 源码提供等义务，例如在相关义务适用时仍要求代码闭源的白标、OEM 或专有集成方案 | 向版权所有者申请单独的商业许可，按双方签署的协议使用 |
+
+使用前请留意：
+
+- **企业内部使用也应遵守适用条款。** 如果修改后的 GEOFlow 供员工通过网络交互使用，应按 AGPL 第 13 条向这些用户显著提供完整对应源码的免费获取方式；对外提供修改版网络服务也适用该要求。源码提供对象取决于具体使用与分发方式，许可证不要求统一上传到公开的 GitHub 仓库，也不能限制接收者依法享有的再分发权利。
+- **业务资料与软件源码分开判断。** 独立的知识库资料、客户数据和生成的文章，通常不会仅因使用 GEOFlow 而需要按 AGPL 公开；若输出包含受许可证覆盖的程序代码或其他作品，应按具体内容判断。
+- **免费指软件许可费。** 服务器、域名、模型 API 调用、第三方服务以及另行采购的技术支持费用由使用方承担。
+
+以上是现有许可证的场景说明，不新增许可例外。具体权利和义务以 [LICENSE](LICENSE) 为准；可参阅 [AGPL 第 13 条](https://www.gnu.org/licenses/agpl-3.0.html#section13) 和 [GNU 关于程序输出的说明](https://www.gnu.org/licenses/gpl-faq.en.html#WhatCaseIsOutputGPL)。复杂的闭源集成或多主体交付方案建议先做法律评估。
+
+商业授权可先通过 [GitHub Issue](https://github.com/yaojingang/GEOFlow/issues/new) 联系版权所有者。Issue 内容会公开显示，请勿提交合同、报价、客户资料或其他敏感信息，初步联系后可转为私下沟通。具体授权义务以许可证和双方签署的协议为准。
+
+外部贡献者保留其贡献版权，同时需要在合并前接受 [GEOFlow Contributor License Agreement v1.0](CLA.md)，使项目可以持续提供 AGPL 开源版本和单独的商业授权。
+
+### 匿名使用统计
+
+匿名使用统计默认关闭。部署方同时启用开关并配置 HTTPS 采集地址后，已登录后台页面每天最多发送一次活跃事件，字段限定为随机实例 ID、管理员不可逆摘要、GEOFlow 版本和事件类型。
+
+```dotenv
+GEOFLOW_TELEMETRY_ENABLED=false
+```
+
+域名、页面路径、管理员账号、邮箱、文章内容、Cookie、`APP_KEY` 和业务密钥不会进入上报载荷；采集地址为空时不会产生请求。
+
+---
+
+## 多语言文档
 
 - [English README](docs/readme/README_en.md)
 - [日本語 README](docs/readme/README_ja.md)
 - [Español README](docs/readme/README_es.md)
 - [Русский README](docs/readme/README_ru.md)
+- [Português (BR) README](docs/readme/README_pt_BR.md)
 
 ---
 
-## 📄 开源协议
+## Star 趋势
 
-本项目采用 [Apache License 2.0](LICENSE)。该协议允许个人和企业在遵守许可证声明、版权保留、修改说明、专利授权和免责声明等条款的前提下使用、修改、分发和商用 GEOFlow。
-
----
-
-## ⭐ Star 趋势
-
-[![Star History Chart](https://api.star-history.com/svg?repos=yaojingang/GEOFlow&type=Date)](https://star-history.com/#yaojingang/GEOFlow&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=yaojingang/GEOFlow&type=Date)](https://star-history.dera.page/#yaojingang/GEOFlow&Date)

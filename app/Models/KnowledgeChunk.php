@@ -11,6 +11,7 @@ class KnowledgeChunk extends Model
 
     protected $fillable = [
         'knowledge_base_id',
+        'generation_key',
         'chunk_index',
         'content',
         'content_hash',
@@ -24,6 +25,10 @@ class KnowledgeChunk extends Model
         'embedding_model_id',
         'embedding_dimensions',
         'embedding_provider',
+        'embedding_fingerprint',
+        'embedding_profile_version',
+        'embedding_profile_digest',
+        'embedding_config_revision',
         'embedding_vector',
     ];
 
@@ -35,6 +40,7 @@ class KnowledgeChunk extends Model
             'token_count' => 'integer',
             'embedding_model_id' => 'integer',
             'embedding_dimensions' => 'integer',
+            'embedding_profile_version' => 'integer',
         ];
     }
 

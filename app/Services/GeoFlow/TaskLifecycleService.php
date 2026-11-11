@@ -2,11 +2,16 @@
 
 namespace App\Services\GeoFlow;
 
+use App\Data\Api\TaskRunData;
+use App\Exceptions\AiModelAccessException;
 use App\Exceptions\ApiException;
+use App\Models\Admin;
 use App\Models\AiModel;
 use App\Models\Article;
+use App\Models\ArticleDistribution;
 use App\Models\Author;
 use App\Models\Category;
+use App\Models\DistributionChannel;
 use App\Models\ImageLibrary;
 use App\Models\KnowledgeBase;
 use App\Models\Prompt;
@@ -14,10 +19,15 @@ use App\Models\Task;
 use App\Models\TaskRun;
 use App\Models\TaskSchedule;
 use App\Models\TitleLibrary;
+use App\Services\Admin\AdminAiModelAccessResolver;
+use App\Services\GeoFlow\Distribution\PlatformWeb\PlatformWebDistributionBridge;
+use App\Services\HostedSites\HostedSiteAllocationRequestService;
+use App\Services\Topics\TopicTaskService;
+use App\Support\GeoFlow\AiQualityRetrievalMode;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
-use Throwable;
+use Illuminate\Validation\ValidationException;
 
 /**
  * 任务生命周期服务。
@@ -39,9 +49,107 @@ class TaskLifecycleService
      */
     public function __construct(
         private JobQueueService $queueService,
+        private AiExecutionContextFactory $aiExecutionContextFactory,
         private TaskMonitoringQueryService $taskMonitoringQueryService,
-        private TaskRealtimeBroadcastService $taskRealtimeBroadcastService
+        private TaskRealtimeBroadcastService $taskRealtimeBroadcastService,
+        private TaskTitleReadinessService $taskTitleReadinessService,
+        private ArticleAiQualityInvalidationService $articleAiQualityInvalidationService,
+        private ArticleAiQualityPolicyResolver $articleAiQualityPolicyResolver,
+        private AiQualityRetrievalReadinessService $aiQualityRetrievalReadinessService,
+        private AiQualityAuditService $aiQualityAuditService,
+        private TaskRunData $taskRunData,
+        private AdminAiModelAccessResolver $adminAiModelAccessResolver,
+        private ?TaskActivationGuard $taskActivationGuard = null,
+        private ?PlatformWebDistributionBridge $platformWebDistributionBridge = null,
     ) {}
+
+    /** @return array{items:list<array<string,mixed>>,pagination:array{page:int,per_page:int,total:int,total_pages:int}} */
+    public function listTasksForApi(int $page, int $perPage, array $filters, Admin $viewer): array
+    {
+        return $this->listTasks($page, $perPage, $filters, $viewer);
+    }
+
+    /** @param array<string,mixed> $data @return array<string,mixed> */
+    public function createTaskForApi(
+        array $data,
+        int $auditAdminId,
+        int $apiTokenId,
+        Admin $viewer,
+    ): array {
+        $defaultedReview = ($data['content_type'] ?? 'article') === 'article' && ! array_key_exists('need_review', $data);
+        $task = $this->createTask($data, $auditAdminId, $apiTokenId, $viewer);
+        $task['compatibility'] = [
+            'need_review_defaulted' => $defaultedReview,
+            'need_review' => (bool) $task['need_review'],
+            'message' => $defaultedReview ? __('admin.task_create.help.api_review_default') : null,
+        ];
+
+        return $task;
+    }
+
+    /** @return array<string,mixed> */
+    public function getTaskForApi(int $taskId, Admin $viewer): array
+    {
+        return $this->getTask($taskId, $viewer);
+    }
+
+    /** @param array<string,mixed> $data @return array<string,mixed> */
+    public function updateTaskForApi(
+        int $taskId,
+        array $data,
+        bool $canManageHostedTask,
+        int $auditAdminId,
+        int $apiTokenId,
+        Admin $viewer,
+    ): array {
+        return $this->updateTask(
+            $taskId,
+            $data,
+            $canManageHostedTask,
+            $auditAdminId,
+            $apiTokenId,
+            $viewer,
+        );
+    }
+
+    /** @return array<string,mixed> */
+    public function startTaskForApi(
+        int $taskId,
+        bool $enqueueNow,
+        bool $canManageHostedTask,
+        Admin $viewer,
+    ): array {
+        return $this->startTask($taskId, $enqueueNow, $canManageHostedTask, $viewer, $viewer);
+    }
+
+    /** @return array<string,mixed> */
+    public function stopTaskForApi(int $taskId, bool $canManageHostedTask, Admin $viewer): array
+    {
+        return $this->stopTask($taskId, $canManageHostedTask, $viewer);
+    }
+
+    /** @param array<string,mixed> $payload @return array{task_id:int,job_id:int,status:string} */
+    public function enqueueTaskForApi(
+        int $taskId,
+        string $jobType,
+        array $payload,
+        bool $canManageHostedTask,
+        Admin $viewer,
+    ): array {
+        return $this->enqueueTask($taskId, $jobType, $payload, $canManageHostedTask, $viewer);
+    }
+
+    /** @return array{items:list<array<string,mixed>>} */
+    public function listTaskJobsForApi(int $taskId, ?string $status, int $limit, Admin $viewer): array
+    {
+        return $this->listTaskJobs($taskId, $status, $limit, $viewer);
+    }
+
+    /** @return array<string,mixed> */
+    public function getJobForApi(int $jobId, Admin $viewer): array
+    {
+        return $this->getJob($jobId, $viewer);
+    }
 
     /**
      * 分页查询任务列表（含 pending/running 运行计数）。
@@ -54,9 +162,19 @@ class TaskLifecycleService
      *     pagination:array{page:int,per_page:int,total:int,total_pages:int}
      * }
      */
-    public function listTasks(int $page = 1, int $perPage = 20, array $filters = []): array
-    {
-        return $this->taskMonitoringQueryService->listTasksPaginated($page, $perPage, $filters);
+    public function listTasks(
+        int $page = 1,
+        int $perPage = 20,
+        array $filters = [],
+        ?Admin $modelViewer = null,
+    ): array {
+        $result = $this->taskMonitoringQueryService->listTasksPaginated($page, $perPage, $filters, $modelViewer);
+        $result['items'] = array_map(fn (array $task): array => [
+            ...$task,
+            'effective_configuration' => $this->taskConfigurationCapabilities($task),
+        ], $result['items']);
+
+        return $result;
     }
 
     /**
@@ -71,12 +189,45 @@ class TaskLifecycleService
      * @param  array<string,mixed>  $data
      * @return array<string,mixed> 新建后的任务详情（getTask 结构）
      */
-    public function createTask(array $data): array
-    {
-        $normalized = $this->normalizeTaskInput($data, false);
+    public function createTask(
+        array $data,
+        ?int $auditAdminId = null,
+        ?int $apiTokenId = null,
+        ?Admin $responseViewer = null,
+    ): array {
+        $accessAdmin = $this->accessAdmin($auditAdminId);
+        if (($data['content_type'] ?? 'article') === 'topic') {
+            $actor = $accessAdmin ?? $responseViewer;
+            abort_unless($actor instanceof Admin, 403);
+            $task = app(TopicTaskService::class)->save($data, $actor);
 
-        DB::beginTransaction();
-        try {
+            return $this->getTask((int) $task->id, $responseViewer);
+        }
+        $normalized = $this->normalizeTaskInput($data, false, $accessAdmin);
+        if (! empty($normalized['ai_quality_enabled'])) {
+            $readiness = $this->aiQualityRetrievalReadinessService->inspect($normalized['knowledge_base_ids'] ?? []);
+            $mode = $normalized['ai_quality_retrieval_mode'] ?? $readiness['highest_available_mode'];
+            $this->assertRetrievalModeAvailable($mode, $readiness);
+            $normalized['ai_quality_retrieval_mode'] = $mode;
+        } else {
+            $normalized['ai_quality_retrieval_mode'] = AiQualityRetrievalMode::legacyDefault();
+        }
+        $this->assertEffectiveAiQualityConfiguration(new Task, $normalized, $normalized['knowledge_base_ids'] ?? [], false);
+        if ($normalized['status'] === 'active') {
+            $this->taskTitleReadinessService->assertCanActivate(
+                $this->taskTitleReadinessService->inspect(
+                    (int) $normalized['title_library_id'],
+                    (int) $normalized['article_limit'],
+                    (bool) $normalized['is_loop'],
+                    'active',
+                ),
+                422,
+            );
+        }
+
+        $taskId = DB::transaction(function () use ($normalized, $auditAdminId, $apiTokenId, $accessAdmin): int {
+            $executionIdentity = $this->aiExecutionContextFactory->identityForTaskCreation($auditAdminId);
+            $this->assertSelectedModelsUsable($accessAdmin, $normalized);
             $task = Task::query()->create([
                 'name' => $normalized['name'],
                 'title_library_id' => $normalized['title_library_id'],
@@ -84,6 +235,17 @@ class TaskLifecycleService
                 'image_count' => $normalized['image_count'],
                 'prompt_id' => $normalized['prompt_id'],
                 'ai_model_id' => $normalized['ai_model_id'],
+                'ai_quality_enabled' => $normalized['ai_quality_enabled'],
+                'ai_quality_retrieval_mode' => $normalized['ai_quality_retrieval_mode'],
+                'ai_quality_policy_version' => 1,
+                'ai_quality_config_version' => 1,
+                'ai_quality_timeout_sampling_enabled' => $normalized['ai_quality_timeout_sampling_enabled'],
+                'ai_quality_auto_optimize_enabled' => $normalized['ai_quality_auto_optimize_enabled'],
+                'ai_quality_optimization_level' => $normalized['ai_quality_optimization_level'],
+                'ai_quality_prompt_id' => $normalized['ai_quality_prompt_id'],
+                'ai_quality_model_id' => $normalized['ai_quality_model_id'],
+                'ai_quality_pass_score' => $normalized['ai_quality_pass_score'],
+                'ai_quality_manual_override_min_score' => $normalized['ai_quality_manual_override_min_score'],
                 'need_review' => $normalized['need_review'],
                 'publish_interval' => $normalized['publish_interval'],
                 'author_id' => $normalized['author_id'],
@@ -95,12 +257,34 @@ class TaskLifecycleService
                 'model_selection_mode' => $normalized['model_selection_mode'],
                 'status' => $normalized['status'],
                 'publish_scope' => $normalized['publish_scope'],
+                'distribution_strategy' => $normalized['distribution_strategy'],
+                'distribution_cursor' => 0,
                 'knowledge_base_id' => $normalized['knowledge_base_id'],
                 'category_mode' => $normalized['category_mode'],
                 'fixed_category_id' => $normalized['fixed_category_id'],
             ]);
+            if ($executionIdentity !== null) {
+                $task->forceFill($executionIdentity)->save();
+            }
+            if ((string) $task->status === 'active') {
+                $this->activationGuard()->assertCanActivate($task, $accessAdmin);
+            }
 
             $taskId = (int) $task->id;
+            $this->syncTaskKnowledgeBases($taskId, $normalized['knowledge_base_ids'] ?? []);
+            $this->aiQualityAuditService->record('task_quality_configuration_created', [
+                'task_id' => $taskId,
+                'admin_id' => $auditAdminId,
+                'api_token_id' => $apiTokenId !== null && $apiTokenId > 0 ? $apiTokenId : null,
+                'policy_version' => 1,
+                'after_hash' => $this->taskQualityConfigurationHash(
+                    $task,
+                    array_values(array_map('intval', $normalized['knowledge_base_ids'] ?? [])),
+                ),
+                'metadata' => [
+                    'retrieval_mode' => (string) $task->ai_quality_retrieval_mode,
+                ],
+            ]);
             $this->queueService->initializeTaskSchedule($taskId);
 
             if ($normalized['status'] === 'active') {
@@ -116,16 +300,118 @@ class TaskLifecycleService
                 ]);
             }
 
-            DB::commit();
-            $this->taskRealtimeBroadcastService->broadcastOverview();
+            return $taskId;
+        });
 
-            return $this->getTask($taskId);
-        } catch (Throwable $e) {
-            if (DB::transactionLevel() > 0) {
-                DB::rollBack();
-            }
-            throw $e;
+        $task = $this->getTask($taskId, $responseViewer);
+        $this->broadcastOverviewAfterCommit();
+
+        return $task;
+    }
+
+    /**
+     * Create a deliberately incomplete task draft for later configuration.
+     * Drafts stay paused and still receive the same scheduler initialization
+     * and realtime refresh used by the regular task lifecycle.
+     *
+     * @param  array<string,mixed>  $data
+     * @return array<string,mixed>
+     */
+    public function createDraftTask(array $data, Admin|int $executionAdmin): array
+    {
+        $name = trim((string) ($data['name'] ?? ''));
+        if ($name === '') {
+            throw new ApiException('validation_failed', '任务名称不能为空', 422);
         }
+        $articleLimit = max(1, min(100, (int) ($data['article_limit'] ?? 10)));
+        $publishInterval = max(60, min(2592000, (int) ($data['publish_interval'] ?? 3600)));
+
+        $taskId = DB::transaction(function () use ($name, $articleLimit, $publishInterval, $executionAdmin): int {
+            $executionIdentity = $this->aiExecutionContextFactory->identityForTaskCreation($executionAdmin);
+            $accessAdmin = $this->accessAdmin($executionAdmin);
+            $dependencies = $this->resolveDraftTaskDependencies($accessAdmin);
+            $this->assertSelectedModelsUsable($accessAdmin, $dependencies);
+            $task = Task::query()->create([
+                'name' => $name,
+                'title_library_id' => $dependencies['title_library_id'],
+                'prompt_id' => $dependencies['prompt_id'],
+                'ai_model_id' => $dependencies['ai_model_id'],
+                'image_count' => 0,
+                'need_review' => 1,
+                'publish_interval' => $publishInterval,
+                'auto_keywords' => 1,
+                'auto_description' => 1,
+                'draft_limit' => $articleLimit,
+                'article_limit' => $articleLimit,
+                'is_loop' => 0,
+                'model_selection_mode' => 'fixed',
+                'status' => 'paused',
+                'schedule_enabled' => 0,
+                'publish_scope' => 'local_only',
+                'distribution_strategy' => TaskDistributionChannelSelector::STRATEGY_BROADCAST,
+                'category_mode' => 'smart',
+                'max_retry_count' => 3,
+            ]);
+            if ($executionIdentity !== null) {
+                $task->forceFill($executionIdentity)->save();
+            }
+            $this->queueService->initializeTaskSchedule((int) $task->id);
+            Task::query()->whereKey($task->id)->update([
+                'schedule_enabled' => 0,
+                'next_run_at' => null,
+                'updated_at' => now(),
+            ]);
+
+            return (int) $task->id;
+        });
+
+        $task = $this->getTask($taskId);
+        $this->broadcastOverviewAfterCommit();
+
+        return $task;
+    }
+
+    /** @return array{title_library_id:int,prompt_id:int,ai_model_id:int} */
+    private function resolveDraftTaskDependencies(Admin $accessAdmin): array
+    {
+        $titleLibraryId = TitleLibrary::query()->orderByDesc('id')->value('id');
+        $promptId = Prompt::query()
+            ->where('type', 'content')
+            ->orderByDesc('id')
+            ->value('id');
+        $aiModelId = $this->adminAiModelAccessResolver
+            ->usableQuery($accessAdmin)
+            ->where(function ($query): void {
+                $query->whereNull('model_type')
+                    ->orWhere('model_type', '')
+                    ->orWhere('model_type', 'chat');
+            })
+            ->value('id');
+
+        $missing = [];
+        if ($titleLibraryId === null) {
+            $missing[] = '标题库';
+        }
+        if ($promptId === null) {
+            $missing[] = '内容提示词';
+        }
+        if ($aiModelId === null) {
+            $missing[] = '已启用的对话模型';
+        }
+        if ($missing !== []) {
+            throw new ApiException(
+                'configuration_required',
+                '创建任务草稿前，请先配置'.implode('、', $missing).'。',
+                422,
+                ['missing' => $missing],
+            );
+        }
+
+        return [
+            'title_library_id' => (int) $titleLibraryId,
+            'prompt_id' => (int) $promptId,
+            'ai_model_id' => (int) $aiModelId,
+        ];
     }
 
     /**
@@ -135,10 +421,12 @@ class TaskLifecycleService
      *
      * @throws ApiException 当任务不存在时抛出 404
      */
-    public function getTask(int $taskId): array
+    public function getTask(int $taskId, ?Admin $modelViewer = null): array
     {
         try {
-            return $this->taskMonitoringQueryService->getTaskMonitoringDetail($taskId);
+            $task = $this->taskMonitoringQueryService->getTaskMonitoringDetail($taskId, $modelViewer);
+
+            return [...$task, 'effective_configuration' => $this->taskConfigurationCapabilities($task)];
         } catch (ModelNotFoundException) {
             throw new ApiException('task_not_found', '任务不存在', 404);
         }
@@ -154,9 +442,44 @@ class TaskLifecycleService
      * @param  array<string,mixed>  $data
      * @return array<string,mixed>
      */
-    public function updateTask(int $taskId, array $data): array
-    {
+    public function updateTask(
+        int $taskId,
+        array $data,
+        bool $canManageHostedTask = false,
+        ?int $auditAdminId = null,
+        ?int $apiTokenId = null,
+        ?Admin $responseViewer = null,
+    ): array {
         $this->ensureTaskExists($taskId);
+        $accessAdmin = $this->accessAdmin($auditAdminId);
+        $currentTask = Task::query()->findOrFail($taskId);
+        if (isset($data['content_type']) && $data['content_type'] !== ($currentTask->content_type ?: 'article')) {
+            throw ValidationException::withMessages(['content_type' => '任务类型保持不变，请创建新任务。']);
+        }
+        if ($currentTask->content_type === 'topic') {
+            $actor = $accessAdmin ?? $responseViewer;
+            abort_unless($actor instanceof Admin, 403);
+            $task = app(TopicTaskService::class)->save($data, $actor, $currentTask);
+
+            return $this->getTask((int) $task->id, $responseViewer);
+        }
+        $qualityFields = [
+            'knowledge_base_id', 'knowledge_base_ids', 'ai_quality_enabled', 'ai_quality_retrieval_mode',
+            'ai_quality_timeout_sampling_enabled', 'ai_quality_prompt_id', 'ai_quality_model_id',
+            'ai_quality_auto_optimize_enabled', 'ai_quality_optimization_level',
+            'ai_quality_pass_score', 'ai_quality_manual_override_min_score', 'ai_model_id',
+            'model_selection_mode', 'publish_scope', 'distribution_strategy', 'need_review',
+        ];
+        $qualityConfigurationRequested = array_intersect($qualityFields, array_keys($data)) !== [];
+        $expectedQualityVersion = isset($data['config_version']) && is_numeric($data['config_version'])
+            ? (int) $data['config_version']
+            : null;
+        unset($data['config_version']);
+        if ($qualityConfigurationRequested && $apiTokenId !== null && $expectedQualityVersion === null) {
+            throw new ApiException('task_ai_quality_config_version_required', '请提供当前任务 AI 质检配置版本', 409, [
+                'required_field' => 'config_version',
+            ]);
+        }
         $normalized = $this->normalizeTaskInput($data, true);
         if (empty($normalized)) {
             throw new ApiException('validation_failed', '没有可更新的字段', 422);
@@ -164,11 +487,256 @@ class TaskLifecycleService
 
         $status = $normalized['status'] ?? null;
         unset($normalized['status']);
+        $knowledgeBaseIdsProvided = array_key_exists('knowledge_base_ids', $normalized);
+        $qualityConfigurationChanged = false;
+        $qualityControlConfigurationChanged = false;
+        $optimizationLevelChanged = false;
+        $optimizationWasDisabled = false;
+        $knowledgeBaseIds = $knowledgeBaseIdsProvided ? $normalized['knowledge_base_ids'] : [];
+        unset($normalized['knowledge_base_ids']);
+        $samplingWasDisabled = false;
+        $preserveWorkflowArticleIds = [];
+        $thresholdsOnlyChanged = false;
 
-        DB::beginTransaction();
-        try {
+        DB::transaction(function () use (&$thresholdsOnlyChanged, &$qualityConfigurationChanged, &$qualityControlConfigurationChanged, &$optimizationLevelChanged, &$optimizationWasDisabled, &$samplingWasDisabled, &$preserveWorkflowArticleIds, $normalized, $knowledgeBaseIdsProvided, $knowledgeBaseIds, $status, $taskId, $canManageHostedTask, $auditAdminId, $apiTokenId, $qualityConfigurationRequested, $expectedQualityVersion, $accessAdmin): void {
+            $current = Task::query()
+                ->whereKey($taskId)
+                ->lockForUpdate()
+                ->firstOrFail([
+                    'id',
+                    'title_library_id',
+                    'content_type',
+                    'target_site_key',
+                    'topic_limit',
+                    'article_limit',
+                    'created_count',
+                    'is_loop',
+                    'status',
+                    'knowledge_base_id',
+                    'ai_quality_enabled',
+                    'ai_quality_retrieval_mode',
+                    'ai_quality_policy_version',
+                    'ai_quality_config_version',
+                    'ai_quality_timeout_sampling_enabled',
+                    'ai_quality_auto_optimize_enabled',
+                    'ai_quality_optimization_level',
+                    'ai_quality_prompt_id',
+                    'ai_quality_model_id',
+                    'ai_quality_pass_score',
+                    'ai_quality_manual_override_min_score',
+                    'ai_model_id',
+                    'model_selection_mode',
+                    'publish_scope',
+                    'distribution_strategy',
+                    'need_review',
+                    'model_access_admin_id',
+                    'model_access_admin_role',
+                    'model_access_policy_version',
+                ]);
+            Article::withTrashed()
+                ->where('task_id', $taskId)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get(['id']);
+            $this->assertCanManageHostedTask($current, $canManageHostedTask);
+            $changedModels = [];
+            foreach (['ai_model_id', 'ai_quality_model_id'] as $modelField) {
+                if (array_key_exists($modelField, $normalized)
+                    && (int) ($normalized[$modelField] ?? 0) !== (int) ($current->{$modelField} ?? 0)) {
+                    $changedModels[$modelField] = $normalized[$modelField];
+                }
+            }
+            $this->assertSelectedModelsUsable($accessAdmin, $changedModels);
+            $executionAdminId = (int) ($current->model_access_admin_id ?? 0);
+            if ($executionAdminId > 0 && $executionAdminId !== (int) ($accessAdmin?->getKey() ?? 0)) {
+                $this->assertSelectedModelsUsable($this->accessAdmin($executionAdminId), $changedModels);
+            }
+            if ($qualityConfigurationRequested
+                && $expectedQualityVersion !== null
+                && $this->taskConfigurationVersion($current) !== $expectedQualityVersion) {
+                throw new ApiException('task_ai_quality_config_version_conflict', '任务 AI 质检配置已更新，请刷新后重试', 409, [
+                    'expected_config_version' => $expectedQualityVersion,
+                    'current_config_version' => $this->taskConfigurationVersion($current),
+                ]);
+            }
+            $effectiveStatus = $status ?? (string) $current->status;
+            $effectiveAiQualityEnabledForAccess = array_key_exists('ai_quality_enabled', $normalized)
+                ? (bool) $normalized['ai_quality_enabled']
+                : (bool) $current->ai_quality_enabled;
+            $effectiveAutoOptimizationEnabledForAccess = $effectiveAiQualityEnabledForAccess
+                && (array_key_exists('ai_quality_auto_optimize_enabled', $normalized)
+                    ? (bool) $normalized['ai_quality_auto_optimize_enabled']
+                    : (bool) $current->ai_quality_auto_optimize_enabled);
+            $mustRevalidateExecutionModels = $effectiveStatus === 'active'
+                || (! (bool) $current->ai_quality_enabled && $effectiveAiQualityEnabledForAccess)
+                || (! (bool) $current->ai_quality_auto_optimize_enabled && $effectiveAutoOptimizationEnabledForAccess);
+            if ($mustRevalidateExecutionModels) {
+                $this->activationGuard()->assertCanActivate($current, $accessAdmin, $normalized);
+            }
+            if ($effectiveStatus === 'active') {
+                $effectiveTitleLibraryId = array_key_exists('title_library_id', $normalized)
+                    ? (int) ($normalized['title_library_id'] ?? 0)
+                    : (int) $current->title_library_id;
+                $this->taskTitleReadinessService->assertCanActivate(
+                    $this->taskTitleReadinessService->inspect(
+                        $effectiveTitleLibraryId,
+                        (int) ($normalized['article_limit'] ?? $current->article_limit),
+                        (bool) ($normalized['is_loop'] ?? $current->is_loop),
+                        'active',
+                        $taskId,
+                    ),
+                    422,
+                );
+            }
+
+            $effectiveAiQualityEnabled = array_key_exists('ai_quality_enabled', $normalized)
+                ? (bool) $normalized['ai_quality_enabled']
+                : (bool) $current->ai_quality_enabled;
+            if (! $effectiveAiQualityEnabled) {
+                unset($normalized['ai_quality_retrieval_mode']);
+            }
+            if (! $effectiveAiQualityEnabled
+                && (array_key_exists('ai_quality_enabled', $normalized)
+                    || array_key_exists('ai_quality_timeout_sampling_enabled', $normalized)
+                    || array_key_exists('ai_quality_auto_optimize_enabled', $normalized))) {
+                $normalized['ai_quality_timeout_sampling_enabled'] = 0;
+                $normalized['ai_quality_auto_optimize_enabled'] = 0;
+            }
+            $effectiveSamplingEnabled = $effectiveAiQualityEnabled && (array_key_exists('ai_quality_timeout_sampling_enabled', $normalized)
+                ? (bool) $normalized['ai_quality_timeout_sampling_enabled']
+                : (bool) $current->ai_quality_timeout_sampling_enabled);
+            $samplingWasDisabled = (bool) $current->ai_quality_timeout_sampling_enabled && ! $effectiveSamplingEnabled;
+            $effectiveOptimizationEnabled = $effectiveAiQualityEnabled && (array_key_exists('ai_quality_auto_optimize_enabled', $normalized)
+                ? (bool) $normalized['ai_quality_auto_optimize_enabled']
+                : (bool) $current->ai_quality_auto_optimize_enabled);
+            $optimizationWasDisabled = (bool) $current->ai_quality_auto_optimize_enabled && ! $effectiveOptimizationEnabled;
+            $optimizationLevelChanged = array_key_exists('ai_quality_optimization_level', $normalized)
+                && (string) $normalized['ai_quality_optimization_level'] !== (string) $current->ai_quality_optimization_level;
+
+            $effectiveKnowledgeBaseIds = $knowledgeBaseIdsProvided
+                ? (is_array($knowledgeBaseIds) ? $knowledgeBaseIds : [])
+                : $this->currentTaskKnowledgeBaseIds($taskId, $current->knowledge_base_id);
+            $currentKnowledgeBaseIds = $this->currentTaskKnowledgeBaseIds($taskId, $current->knowledge_base_id);
+            $normalizedCurrentKnowledgeBaseIds = array_values(array_unique(array_map('intval', $currentKnowledgeBaseIds)));
+            $normalizedEffectiveKnowledgeBaseIds = array_values(array_unique(array_map('intval', $effectiveKnowledgeBaseIds)));
+            $beforeQualityConfigurationHash = $this->taskQualityConfigurationHash(
+                $current,
+                $normalizedCurrentKnowledgeBaseIds,
+            );
+            $qualityConfigurationChanged = $normalizedCurrentKnowledgeBaseIds !== $normalizedEffectiveKnowledgeBaseIds;
+            $changedQualityFields = [];
+            $qualityControlConfigurationChanged = $qualityConfigurationChanged;
+            foreach ([
+                'ai_quality_enabled',
+                'ai_quality_retrieval_mode',
+                'ai_quality_prompt_id',
+                'ai_quality_model_id',
+                'ai_quality_pass_score',
+                'ai_quality_manual_override_min_score',
+                'ai_model_id',
+                'model_selection_mode',
+            ] as $field) {
+                if (array_key_exists($field, $normalized)
+                    && (string) ($normalized[$field] ?? '') !== (string) ($current->{$field} ?? '')) {
+                    $qualityConfigurationChanged = true;
+                    $changedQualityFields[] = $field;
+                }
+            }
+            $thresholdsOnlyChanged = $normalizedCurrentKnowledgeBaseIds === $normalizedEffectiveKnowledgeBaseIds
+                && $changedQualityFields !== []
+                && array_diff($changedQualityFields, ['ai_quality_pass_score', 'ai_quality_manual_override_min_score']) === [];
+            foreach ([
+                'ai_quality_enabled',
+                'ai_quality_retrieval_mode',
+                'ai_quality_timeout_sampling_enabled',
+                'ai_quality_auto_optimize_enabled',
+                'ai_quality_optimization_level',
+                'ai_quality_prompt_id',
+                'ai_quality_model_id',
+                'ai_quality_pass_score',
+                'ai_quality_manual_override_min_score',
+                'ai_model_id',
+                'model_selection_mode',
+                'publish_scope',
+                'distribution_strategy',
+                'need_review',
+            ] as $field) {
+                if (array_key_exists($field, $normalized)
+                    && (string) ($normalized[$field] ?? '') !== (string) ($current->{$field} ?? '')) {
+                    $qualityControlConfigurationChanged = true;
+                    break;
+                }
+            }
+            $retrievalReadinessChanged = (! (bool) $current->ai_quality_enabled && $effectiveAiQualityEnabled)
+                || $normalizedCurrentKnowledgeBaseIds !== $normalizedEffectiveKnowledgeBaseIds
+                || (array_key_exists('ai_quality_retrieval_mode', $normalized)
+                    && (string) $normalized['ai_quality_retrieval_mode'] !== (string) (
+                        $current->ai_quality_retrieval_mode ?: AiQualityRetrievalMode::legacyDefault()
+                    ));
+            $this->assertEffectiveAiQualityConfiguration(
+                $current,
+                $normalized,
+                $effectiveKnowledgeBaseIds,
+                $retrievalReadinessChanged,
+            );
+
+            if ($qualityConfigurationChanged) {
+                $normalized['ai_quality_policy_version'] = max(1, (int) $current->ai_quality_policy_version) + 1;
+            }
+            if ($qualityControlConfigurationChanged) {
+                $normalized['ai_quality_config_version'] = $this->taskConfigurationVersion($current) + 1;
+            }
+
             if (! empty($normalized)) {
                 Task::query()->whereKey($taskId)->update($normalized);
+            }
+
+            $publishScopeNarrowed = array_key_exists('publish_scope', $normalized)
+                && (string) $normalized['publish_scope'] === 'distribution_only'
+                && (string) $current->publish_scope !== 'distribution_only';
+            if ($publishScopeNarrowed) {
+                $publishedArticles = Article::withTrashed()
+                    ->where('task_id', $taskId)
+                    ->where('status', 'published');
+                $preserveWorkflowArticleIds = (clone $publishedArticles)
+                    ->pluck('articles.id')
+                    ->map('intval')
+                    ->all();
+                if ($preserveWorkflowArticleIds !== []) {
+                    $publishedArticles->update([
+                        'status' => 'private',
+                        'published_at' => null,
+                        'updated_at' => now(),
+                    ]);
+                }
+            }
+
+            if ($knowledgeBaseIdsProvided) {
+                $this->syncTaskKnowledgeBases($taskId, is_array($knowledgeBaseIds) ? $knowledgeBaseIds : []);
+            }
+
+            if ($qualityConfigurationChanged) {
+                $updatedTask = Task::query()->whereKey($taskId)->firstOrFail();
+                Article::withTrashed()
+                    ->where('task_id', $taskId)
+                    ->update([
+                        'ai_quality_policy_version' => DB::raw('COALESCE(ai_quality_policy_version, 1) + 1'),
+                        'updated_at' => now(),
+                    ]);
+                $this->aiQualityAuditService->record('task_quality_configuration_changed', [
+                    'task_id' => $taskId,
+                    'admin_id' => $auditAdminId,
+                    'api_token_id' => $apiTokenId !== null && $apiTokenId > 0 ? $apiTokenId : null,
+                    'policy_version' => (int) $updatedTask->ai_quality_policy_version,
+                    'before_hash' => $beforeQualityConfigurationHash,
+                    'after_hash' => $this->taskQualityConfigurationHash(
+                        $updatedTask,
+                        $normalizedEffectiveKnowledgeBaseIds,
+                    ),
+                    'metadata' => [
+                        'retrieval_mode' => (string) $updatedTask->ai_quality_retrieval_mode,
+                    ],
+                ]);
             }
 
             if ($status === 'active') {
@@ -177,33 +745,186 @@ class TaskLifecycleService
                 $this->pauseTask($taskId, '任务已暂停');
             }
 
-            DB::commit();
-            $this->taskRealtimeBroadcastService->broadcastOverview();
-
-            return $this->getTask($taskId);
-        } catch (Throwable $e) {
-            if (DB::transactionLevel() > 0) {
-                DB::rollBack();
+            if (! $qualityConfigurationChanged && $optimizationWasDisabled) {
+                $this->articleAiQualityInvalidationService->cancelTaskOptimization(
+                    $taskId,
+                    '任务已关闭自动优化',
+                    recoverWorkflow: true,
+                );
+            } elseif ($optimizationLevelChanged) {
+                $this->articleAiQualityInvalidationService->invalidateTaskOptimization(
+                    $taskId,
+                    '任务自动优化目标已更新',
+                    stopReason: 'task_optimization_level_changed',
+                    recoverWorkflow: true,
+                    taskAutoOnly: true,
+                );
+            } elseif ($samplingWasDisabled) {
+                $this->articleAiQualityInvalidationService->invalidateSampledTaskChecks(
+                    $taskId,
+                    '任务已关闭超时自动抽样，旧抽样结果不再作为当前发布依据',
+                );
             }
-            throw $e;
+
+        });
+
+        if ($qualityConfigurationChanged) {
+            $recalculated = $thresholdsOnlyChanged ? app(ArticleAiQualityThresholdRecalculator::class)->forTask($taskId) : [];
+            $this->articleAiQualityInvalidationService->invalidateTask(
+                $taskId,
+                '任务质检配置或知识依据已更新',
+                preserveWorkflowArticleIds: $preserveWorkflowArticleIds,
+                recalculatedArticleIds: $recalculated,
+            );
         }
+
+        app(ArticleWorkflowTransitionService::class)->recomputeTaskReviews($taskId);
+        app(ArticleWorkflowTransitionService::class)->reconcileImmediateForTask($taskId);
+
+        $task = $this->getTask($taskId, $responseViewer);
+        $this->broadcastOverviewAfterCommit();
+
+        return $task;
     }
 
     /**
-     * 删除任务，并对齐后台删除逻辑：关联文章进入回收站后解除 task_id 绑定。
+     * 删除任务：任务保留在回收站 90 天，关联文章进入内容回收站后解除 task_id 绑定。
      *
      * @return array{id:int,name:string,deleted:bool}
      */
-    public function deleteTask(int $taskId): array
-    {
-        $task = Task::query()->whereKey($taskId)->first(['id', 'name']);
-        if (! $task) {
-            throw new ApiException('task_not_found', '任务不存在', 404);
-        }
+    public function deleteTask(
+        int $taskId,
+        bool $canManageHostedTask = false,
+        ?int $auditAdminId = null,
+        ?int $apiTokenId = null,
+    ): array {
+        $taskName = DB::transaction(function () use ($taskId, $canManageHostedTask, $auditAdminId, $apiTokenId): string {
+            $task = Task::query()
+                ->whereKey($taskId)
+                ->lockForUpdate()
+                ->first([
+                    'id',
+                    'name', 'content_type', 'target_site_key',
+                    'knowledge_base_id',
+                    'ai_quality_enabled',
+                    'ai_quality_retrieval_mode',
+                    'ai_quality_policy_version',
+                    'ai_quality_prompt_id',
+                    'ai_quality_model_id',
+                    'ai_quality_pass_score',
+                    'ai_quality_manual_override_min_score',
+                    'ai_quality_timeout_sampling_enabled',
+                    'ai_model_id',
+                    'model_selection_mode',
+                    'need_review',
+                    'publish_scope',
+                    'distribution_strategy',
+                ]);
+            if (! $task) {
+                throw new ApiException('task_not_found', '任务不存在', 404);
+            }
+            $requiresSuperAdminRestore = $this->assertCanManageHostedTask($task, $canManageHostedTask);
 
-        $taskName = (string) $task->name;
+            $this->pauseTask($taskId, '任务已删除');
+            TaskRun::query()
+                ->where('task_id', $taskId)
+                ->where('status', 'running')
+                ->update([
+                    'status' => 'cancelled',
+                    'finished_at' => now(),
+                    'error_message' => '任务已删除',
+                ]);
 
-        DB::transaction(function () use ($taskId): void {
+            $articleIds = Article::withTrashed()
+                ->where('task_id', $taskId)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->pluck('id');
+            $qualityKnowledgeBaseIds = $this->currentTaskKnowledgeBaseIds(
+                $taskId,
+                $task->knowledge_base_id,
+            );
+            $beforeQualityConfigurationHash = $this->taskQualityConfigurationHash(
+                $task,
+                $qualityKnowledgeBaseIds,
+            );
+            $task->load(['qualityPrompt', 'qualityModel', 'aiModel', 'knowledgeBases']);
+            $detachedPolicySnapshot = $this->articleAiQualityPolicyResolver->snapshot(
+                $this->articleAiQualityPolicyResolver->fromTaskForDetachment($task),
+            );
+            if ($articleIds->isNotEmpty()) {
+                DB::table('article_ai_quality_knowledge_bases')
+                    ->whereIn('article_id', $articleIds)
+                    ->delete();
+                $pivotRows = [];
+                foreach ($articleIds as $articleId) {
+                    foreach ($qualityKnowledgeBaseIds as $sortOrder => $knowledgeBaseId) {
+                        $pivotRows[] = [
+                            'article_id' => (int) $articleId,
+                            'knowledge_base_id' => (int) $knowledgeBaseId,
+                            'sort_order' => $sortOrder,
+                            'created_at' => now(),
+                            'updated_at' => now(),
+                        ];
+                    }
+                }
+                if ($pivotRows !== []) {
+                    DB::table('article_ai_quality_knowledge_bases')->insert($pivotRows);
+                }
+                Article::withTrashed()
+                    ->whereIn('id', $articleIds)
+                    ->update([
+                        'ai_quality_retrieval_mode_override' => (string) (
+                            $task->ai_quality_retrieval_mode ?: AiQualityRetrievalMode::legacyDefault()
+                        ),
+                        'ai_quality_policy_version' => DB::raw('COALESCE(ai_quality_policy_version, 1) + 1'),
+                        'ai_quality_required_at_creation' => (bool) $task->ai_quality_enabled,
+                        'ai_quality_policy_snapshot' => json_encode(
+                            $detachedPolicySnapshot,
+                            JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+                        ),
+                        'updated_at' => now(),
+                    ]);
+            }
+            $this->articleAiQualityInvalidationService->cancelArticles($articleIds, '任务已删除');
+            ArticleDistribution::query()
+                ->whereIn('article_id', $articleIds)
+                ->where('status', 'queued')
+                ->update([
+                    'status' => 'failed',
+                    'next_retry_at' => null,
+                    'last_error_message' => '任务已删除，待执行分发已取消。',
+                    'updated_at' => now(),
+                ]);
+            $awaitingExtensionIds = ArticleDistribution::query()
+                ->whereIn('article_id', $articleIds)
+                ->where('status', 'awaiting_extension')
+                ->pluck('id')
+                ->map(static fn ($id): int => (int) $id)
+                ->all();
+            ArticleDistribution::query()
+                ->whereIn('article_id', $articleIds)
+                ->where('status', 'awaiting_extension')
+                ->update([
+                    'status' => 'failed',
+                    'next_retry_at' => null,
+                    'last_error_message' => '任务已删除，等待扩展回执的分发已取消。',
+                    'updated_at' => now(),
+                ]);
+            if ($awaitingExtensionIds !== []) {
+                ($this->platformWebDistributionBridge ?? app(PlatformWebDistributionBridge::class))
+                    ->cancelWorkOrdersForDistributions($awaitingExtensionIds, '任务已删除，扩展发布工单已取消。');
+            }
+            ArticleDistribution::query()
+                ->whereIn('article_id', $articleIds)
+                ->where('status', 'sending')
+                ->update([
+                    'status' => 'outcome_unknown',
+                    'next_retry_at' => null,
+                    'last_error_message' => '任务删除时外部分发已经开始，请人工核对远端结果。',
+                    'updated_at' => now(),
+                ]);
+
             Article::query()
                 ->where('task_id', $taskId)
                 ->whereNull('deleted_at')
@@ -212,7 +933,7 @@ class TaskLifecycleService
                     'updated_at' => now(),
                 ]);
 
-            foreach (['article_queue', 'task_materials', 'task_schedules'] as $table) {
+            foreach (['article_queue', 'task_materials', 'task_schedules', 'task_distribution_channels'] as $table) {
                 if (Schema::hasTable($table)) {
                     DB::table($table)->where('task_id', $taskId)->delete();
                 }
@@ -225,10 +946,25 @@ class TaskLifecycleService
                     'updated_at' => now(),
                 ]);
 
-            Task::query()->whereKey($taskId)->delete();
+            $task->delete();
+            $this->aiQualityAuditService->record('task_deleted', [
+                'task_id' => $taskId,
+                'admin_id' => $auditAdminId,
+                'api_token_id' => $apiTokenId !== null && $apiTokenId > 0 ? $apiTokenId : null,
+                'policy_version' => max(1, (int) $task->ai_quality_policy_version),
+                'before_hash' => $beforeQualityConfigurationHash,
+                'reason_code' => 'task_soft_deleted',
+            ]);
+            DB::table('task_trash_entries')
+                ->where('task_id', $taskId)
+                ->update([
+                    'requires_super_admin_restore' => $requiresSuperAdminRestore,
+                ]);
+
+            return (string) $task->name;
         });
 
-        $this->taskRealtimeBroadcastService->broadcastOverview();
+        $this->broadcastOverviewAfterCommit();
 
         return [
             'id' => $taskId,
@@ -238,16 +974,114 @@ class TaskLifecycleService
     }
 
     /**
+     * 从任务垃圾箱恢复任务主记录，并保持安全的暂停状态。
+     *
+     * 删除任务时已清理的排期、渠道、素材和文章关联不会在这里重建。
+     *
+     * @return array{id:int,name:string,restored:bool}
+     */
+    public function restoreTask(
+        int $taskId,
+        int $trashSequence,
+        bool $canManageProtectedTask = false,
+        ?int $auditAdminId = null,
+        ?int $apiTokenId = null,
+    ): array {
+        $restoredTask = DB::transaction(function () use ($taskId, $trashSequence, $canManageProtectedTask, $auditAdminId, $apiTokenId): array {
+            $task = Task::onlyTrashed()
+                ->whereKey($taskId)
+                ->lockForUpdate()
+                ->first([
+                    'id',
+                    'name',
+                    'status',
+                    'schedule_enabled',
+                    'next_run_at',
+                    'ai_quality_policy_version',
+                    'deleted_at',
+                ]);
+            if (! $task) {
+                throw new ApiException('task_not_found', '任务不存在或已恢复', 404);
+            }
+
+            $retentionCutoff = now()
+                ->subDays(Task::TRASH_RETENTION_DAYS)
+                ->format('Y-m-d H:i:s.u');
+            $trashEntry = DB::table('task_trash_entries')
+                ->where('task_id', $taskId)
+                ->where('sequence', $trashSequence)
+                ->where('deleted_at', '>', $retentionCutoff)
+                ->lockForUpdate()
+                ->first(['task_id', 'requires_super_admin_restore']);
+            if (! $trashEntry) {
+                throw new ApiException('task_restore_unavailable', '任务已超过垃圾箱保留期限', 409);
+            }
+            if ((bool) $trashEntry->requires_super_admin_restore && ! $canManageProtectedTask) {
+                throw new ApiException('forbidden', '该任务只能由超级管理员恢复', 403);
+            }
+
+            $task->forceFill([
+                'status' => 'paused',
+                'schedule_enabled' => 0,
+                'next_run_at' => null,
+            ])->save();
+
+            if (! $task->restore()) {
+                throw new ApiException('task_restore_failed', '任务恢复失败', 409);
+            }
+            $this->aiQualityAuditService->record('task_restored', [
+                'task_id' => $taskId,
+                'admin_id' => $auditAdminId,
+                'api_token_id' => $apiTokenId !== null && $apiTokenId > 0 ? $apiTokenId : null,
+                'policy_version' => max(1, (int) $task->ai_quality_policy_version),
+                'reason_code' => 'task_soft_restored',
+            ]);
+
+            return [
+                'id' => (int) $task->id,
+                'name' => (string) $task->name,
+                'restored' => true,
+            ];
+        });
+
+        $this->broadcastOverviewAfterCommit();
+
+        return $restoredTask;
+    }
+
+    /**
      * 启动任务。
      *
      * @param  bool  $enqueueNow  是否立即投递一条执行任务（手动启动场景）
      * @return array<string,mixed>
      */
-    public function startTask(int $taskId, bool $enqueueNow = false): array
-    {
+    public function startTask(
+        int $taskId,
+        bool $enqueueNow = false,
+        bool $canManageHostedTask = false,
+        Admin|int|null $operator = null,
+        ?Admin $responseViewer = null,
+    ): array {
         $this->ensureTaskExists($taskId);
-        DB::beginTransaction();
-        try {
+        $jobId = DB::transaction(function () use ($taskId, $enqueueNow, $canManageHostedTask, $operator): ?int {
+            $task = Task::query()
+                ->whereKey($taskId)
+                ->lockForUpdate()
+                ->firstOrFail();
+            $this->assertCanManageHostedTask($task, $canManageHostedTask);
+            if ($task->content_type === 'topic') {
+                $actor = $operator instanceof Admin ? $operator : Admin::query()->find((int) $operator);
+                abort_unless($actor instanceof Admin, 403);
+                app(TopicTaskService::class)->start($task, $actor, false);
+
+                return $enqueueNow ? $this->queueService->enqueueTaskJob($taskId, 'generate_topic', ['source' => 'api_manual_start']) : null;
+            }
+            $this->taskTitleReadinessService->assertCanActivate(
+                $this->taskTitleReadinessService->inspectTask($task),
+                409,
+            );
+            $this->activationGuard()->assertCanActivate($task, $operator);
+
             // 手动“立即执行”场景下，不把 next_run_at 强行置为 now，
             // 避免与手动入队叠加导致一次点击触发两次执行。
             $this->activateTask($taskId, ! $enqueueNow);
@@ -261,20 +1095,17 @@ class TaskLifecycleService
                     ]);
                 }
             }
-            DB::commit();
-            $task = $this->getTask($taskId);
-            if ($jobId !== null) {
-                $task['started_job_id'] = $jobId;
-            }
-            $this->taskRealtimeBroadcastService->broadcastOverview();
 
-            return $task;
-        } catch (Throwable $e) {
-            if (DB::transactionLevel() > 0) {
-                DB::rollBack();
-            }
-            throw $e;
+            return $jobId;
+        });
+
+        $task = $this->getTask($taskId, $responseViewer);
+        if ($jobId !== null) {
+            $task['started_job_id'] = $jobId;
         }
+        $this->broadcastOverviewAfterCommit();
+
+        return $task;
     }
 
     /**
@@ -287,29 +1118,32 @@ class TaskLifecycleService
      *
      * @return array<string,mixed>
      */
-    public function stopTask(int $taskId): array
-    {
+    public function stopTask(
+        int $taskId,
+        bool $canManageHostedTask = false,
+        ?Admin $responseViewer = null,
+    ): array {
         $this->ensureTaskExists($taskId);
-        DB::beginTransaction();
-        try {
+        [$cancelledJobs, $runningJobs] = DB::transaction(function () use ($taskId, $canManageHostedTask): array {
+            $task = Task::query()
+                ->whereKey($taskId)
+                ->lockForUpdate()
+                ->firstOrFail(['id', 'content_type', 'target_site_key']);
+            $this->assertCanManageHostedTask($task, $canManageHostedTask);
             $cancelledJobs = $this->pauseTask($taskId, '任务已暂停');
             $runningJobs = TaskRun::query()
                 ->where('task_id', $taskId)
                 ->where('status', 'running')
                 ->count();
-            DB::commit();
-            $task = $this->getTask($taskId);
-            $task['cancelled_jobs'] = $cancelledJobs;
-            $task['running_jobs'] = $runningJobs;
-            $this->taskRealtimeBroadcastService->broadcastOverview();
 
-            return $task;
-        } catch (Throwable $e) {
-            if (DB::transactionLevel() > 0) {
-                DB::rollBack();
-            }
-            throw $e;
-        }
+            return [$cancelledJobs, $runningJobs];
+        });
+        $task = $this->getTask($taskId, $responseViewer);
+        $task['cancelled_jobs'] = $cancelledJobs;
+        $task['running_jobs'] = $runningJobs;
+        $this->broadcastOverviewAfterCommit();
+
+        return $task;
     }
 
     /**
@@ -323,18 +1157,52 @@ class TaskLifecycleService
      *
      * @throws ApiException 任务不存在、任务未启用、或已有进行中任务时抛出
      */
-    public function enqueueTask(int $taskId, string $jobType = 'generate_article', array $payload = []): array
-    {
-        $task = Task::query()->find($taskId, ['id', 'status', 'schedule_enabled']);
-        if (! $task) {
-            throw new ApiException('task_not_found', '任务不存在', 404);
-        }
+    public function enqueueTask(
+        int $taskId,
+        string $jobType = 'generate_article',
+        array $payload = [],
+        bool $canManageHostedTask = false,
+        Admin|int|null $operator = null,
+    ): array {
+        $jobId = DB::transaction(function () use ($taskId, $jobType, $payload, $canManageHostedTask, $operator): ?int {
+            $task = Task::query()
+                ->whereKey($taskId)
+                ->lockForUpdate()
+                ->first([
+                    'id',
+                    'title_library_id',
+                    'content_type',
+                    'target_site_key',
+                    'topic_limit',
+                    'article_limit',
+                    'created_count',
+                    'is_loop',
+                    'status',
+                    'schedule_enabled',
+                    'ai_model_id',
+                    'ai_quality_enabled',
+                    'ai_quality_model_id',
+                    'model_access_admin_id',
+                    'model_access_admin_role',
+                    'model_access_policy_version',
+                ]);
+            if (! $task) {
+                throw new ApiException('task_not_found', '任务不存在', 404);
+            }
+            $this->assertCanManageHostedTask($task, $canManageHostedTask);
 
-        if (($task->status ?? 'paused') !== 'active' || (int) ($task->schedule_enabled ?? 1) !== 1) {
-            throw new ApiException('task_not_active', '任务未启用，无法入队', 409);
-        }
+            if (($task->status ?? 'paused') !== 'active' || (int) ($task->schedule_enabled ?? 1) !== 1) {
+                throw new ApiException('task_not_active', '任务未启用，无法入队', 409);
+            }
 
-        $jobId = $this->queueService->enqueueTaskJob($taskId, $jobType, $payload);
+            $this->activationGuard()->assertCanActivate($task, $operator);
+            $this->taskTitleReadinessService->assertCanActivate(
+                $this->taskTitleReadinessService->inspectTask($task),
+                409,
+            );
+
+            return $this->queueService->enqueueTaskJob($taskId, $jobType, $payload);
+        });
         if ($jobId === null) {
             throw new ApiException('job_already_exists', '任务已处于排队或执行中', 409);
         }
@@ -346,6 +1214,46 @@ class TaskLifecycleService
         ];
     }
 
+    private function assertCanManageHostedTask(Task $task, bool $canManageHostedTask): bool
+    {
+        $isHostedTask = ($task->content_type === 'topic' && $task->target_site_key !== 'primary') || $task->distributionChannels()
+            ->where('distribution_channels.channel_type', DistributionChannel::TYPE_HOSTED_SITE)
+            ->exists();
+        if ($isHostedTask && ! $canManageHostedTask) {
+            throw new ApiException('forbidden', '托管站点任务只能由超级管理员管理', 403);
+        }
+
+        return $isHostedTask;
+    }
+
+    /** @param list<int> $knowledgeBaseIds */
+    private function taskQualityConfigurationHash(Task $task, array $knowledgeBaseIds): string
+    {
+        return hash('sha256', json_encode([
+            'enabled' => (bool) $task->ai_quality_enabled,
+            'retrieval_mode' => (string) ($task->ai_quality_retrieval_mode ?: AiQualityRetrievalMode::legacyDefault()),
+            'knowledge_base_ids' => array_values(array_map('intval', $knowledgeBaseIds)),
+            'prompt_id' => $task->ai_quality_prompt_id ? (int) $task->ai_quality_prompt_id : null,
+            'model_id' => $task->ai_quality_model_id ? (int) $task->ai_quality_model_id : null,
+            'pass_score' => (int) $task->ai_quality_pass_score,
+            'manual_override_min_score' => (int) $task->ai_quality_manual_override_min_score,
+            'timeout_sampling_enabled' => (bool) $task->ai_quality_timeout_sampling_enabled,
+            'auto_optimize_enabled' => (bool) $task->ai_quality_auto_optimize_enabled,
+            'optimization_level' => (string) $task->ai_quality_optimization_level,
+            'policy_version' => max(1, (int) $task->ai_quality_policy_version),
+            'config_version' => $this->taskConfigurationVersion($task),
+        ], JSON_THROW_ON_ERROR));
+    }
+
+    private function taskConfigurationVersion(Task $task): int
+    {
+        return max(
+            1,
+            (int) ($task->ai_quality_config_version ?? 1),
+            (int) ($task->ai_quality_policy_version ?? 1),
+        );
+    }
+
     /**
      * 查询任务下的执行记录（task_runs）。
      *
@@ -353,8 +1261,12 @@ class TaskLifecycleService
      * @param  int  $limit  返回数量上限（1~100）
      * @return array{items:list<array<string,mixed>>}
      */
-    public function listTaskJobs(int $taskId, ?string $status = null, int $limit = 20): array
-    {
+    public function listTaskJobs(
+        int $taskId,
+        ?string $status,
+        int $limit,
+        Admin $viewer,
+    ): array {
         $this->ensureTaskExists($taskId);
         $limit = max(1, min(100, $limit));
 
@@ -368,7 +1280,7 @@ class TaskLifecycleService
             $q->where('status', $status);
         }
 
-        return ['items' => $q->get()->map(fn (TaskRun $run) => $run->getAttributes())->all()];
+        return ['items' => $q->get()->map(fn (TaskRun $run) => $this->taskRunData->fromModel($run, $viewer))->all()];
     }
 
     /**
@@ -380,35 +1292,14 @@ class TaskLifecycleService
      *
      * @throws ApiException 当执行记录不存在时抛出 404
      */
-    public function getJob(int $jobId): array
+    public function getJob(int $jobId, Admin $viewer): array
     {
         $run = TaskRun::query()->find($jobId);
         if (! $run) {
             throw new ApiException('job_not_found', 'Job 不存在', 404);
         }
-        $meta = is_array($run->meta) ? $run->meta : [];
-        $payload = is_array($meta['payload'] ?? null) ? $meta['payload'] : [];
 
-        return [
-            'id' => (int) $run->id,
-            'task_id' => (int) $run->task_id,
-            'job_type' => (string) ($meta['job_type'] ?? 'generate_article'),
-            'status' => (string) $run->status,
-            'attempt_count' => (int) ($meta['attempt_count'] ?? 0),
-            'max_attempts' => (int) ($meta['max_attempts'] ?? 0),
-            'worker_id' => is_string($meta['worker_id'] ?? null) ? $meta['worker_id'] : null,
-            'claimed_at' => $run->started_at?->format('Y-m-d H:i:s'),
-            'finished_at' => $run->finished_at?->format('Y-m-d H:i:s'),
-            'error_message' => $run->error_message ?? '',
-            'payload' => $payload,
-            'task_run_summary' => [
-                'article_id' => $run->article_id !== null ? (int) $run->article_id : null,
-                'duration_ms' => (int) ($run->duration_ms ?? 0),
-                'status' => $run->status ?? null,
-                'error_message' => $run->error_message ?? '',
-                'meta' => $meta,
-            ],
-        ];
+        return $this->taskRunData->fromModel($run, $viewer);
     }
 
     /**
@@ -423,7 +1314,7 @@ class TaskLifecycleService
      *
      * @throws ApiException 字段校验失败时抛 422，并附带 field_errors
      */
-    private function normalizeTaskInput(array $data, bool $isUpdate): array
+    private function normalizeTaskInput(array $data, bool $isUpdate, ?Admin $accessAdmin = null): array
     {
         $output = [];
         $fieldErrors = [];
@@ -444,12 +1335,25 @@ class TaskLifecycleService
             'image_library_id' => ['model' => ImageLibrary::class, 'message' => '选择的图片库不存在', 'required' => false],
             'prompt_id' => ['model' => Prompt::class, 'message' => '选择的内容提示词不存在', 'required' => ! $isUpdate, 'prompt_content' => true],
             'ai_model_id' => ['model' => AiModel::class, 'message' => '选择的AI模型不存在或未激活', 'required' => ! $isUpdate, 'ai_active_chat' => true],
+            'ai_quality_prompt_id' => ['model' => Prompt::class, 'message' => '选择的 AI 质检方案不存在', 'required' => false, 'prompt_quality' => true],
+            'ai_quality_model_id' => ['model' => AiModel::class, 'message' => '选择的 AI 质检模型不存在或未激活', 'required' => false, 'ai_active_chat' => true],
             'author_id' => ['model' => Author::class, 'message' => '选择的作者不存在', 'required' => false],
             'knowledge_base_id' => ['model' => KnowledgeBase::class, 'message' => '选择的知识库不存在', 'required' => false],
             'fixed_category_id' => ['model' => Category::class, 'message' => '固定分类不存在', 'required' => false],
         ];
+        $knowledgeBaseIdsProvided = array_key_exists('knowledge_base_ids', $data);
+
+        if ($knowledgeBaseIdsProvided) {
+            $knowledgeBaseIds = $this->normalizeKnowledgeBaseIds($data['knowledge_base_ids'], $fieldErrors);
+            $output['knowledge_base_ids'] = $knowledgeBaseIds;
+            $output['knowledge_base_id'] = $knowledgeBaseIds[0] ?? null;
+        }
 
         foreach ($referenceMap as $field => $config) {
+            if ($field === 'knowledge_base_id' && $knowledgeBaseIdsProvided) {
+                continue;
+            }
+
             if (! array_key_exists($field, $data)) {
                 if (! $isUpdate && $config['required']) {
                     $fieldErrors[$field] = '缺少必填字段';
@@ -476,16 +1380,19 @@ class TaskLifecycleService
             // prompt 与 ai_model 的校验规则与普通外键不同，这里单独处理业务约束。
             if (! empty($config['prompt_content'])) {
                 $exists = Prompt::query()->whereKey($id)->where('type', 'content')->exists();
+            } elseif (! empty($config['prompt_quality'])) {
+                $exists = Prompt::query()->whereKey($id)->where('type', 'quality_check')->exists();
             } elseif (! empty($config['ai_active_chat'])) {
-                $exists = AiModel::query()
-                    ->whereKey($id)
-                    ->where('status', 'active')
-                    ->where(function ($q) {
-                        $q->whereNull('model_type')
-                            ->orWhere('model_type', '')
-                            ->orWhere('model_type', 'chat');
-                    })
-                    ->exists();
+                $model = AiModel::query()->whereKey($id)->first();
+                $exists = $model instanceof AiModel;
+                if ($exists && ! $isUpdate) {
+                    $exists = (string) $model->status === 'active'
+                        && $model->archived_at === null
+                        && in_array((string) ($model->model_type ?? ''), ['', 'chat'], true);
+                }
+                if ($exists && $accessAdmin instanceof Admin) {
+                    $this->assertModelUsable($accessAdmin, $model, $field);
+                }
             } else {
                 $exists = $modelClass::query()->whereKey($id)->exists();
             }
@@ -497,12 +1404,86 @@ class TaskLifecycleService
             }
         }
 
-        $flagFields = ['need_review', 'auto_keywords', 'auto_description', 'is_loop'];
+        if (! $knowledgeBaseIdsProvided && array_key_exists('knowledge_base_id', $output)) {
+            $knowledgeBaseId = (int) ($output['knowledge_base_id'] ?? 0);
+            $output['knowledge_base_ids'] = $knowledgeBaseId > 0 ? [$knowledgeBaseId] : [];
+        }
+
+        $flagFields = [
+            'need_review',
+            'auto_keywords',
+            'auto_description',
+            'is_loop',
+            'ai_quality_enabled',
+            'ai_quality_timeout_sampling_enabled',
+            'ai_quality_auto_optimize_enabled',
+        ];
         foreach ($flagFields as $field) {
             if (array_key_exists($field, $data)) {
                 $output[$field] = $this->toFlag($data[$field]);
             } elseif (! $isUpdate) {
                 $output[$field] = in_array($field, ['need_review', 'auto_keywords', 'auto_description'], true) ? 1 : 0;
+            }
+        }
+
+        if (! $isUpdate && empty($output['ai_quality_enabled'])) {
+            $output['ai_quality_timeout_sampling_enabled'] = 0;
+            $output['ai_quality_auto_optimize_enabled'] = 0;
+        }
+
+        if (array_key_exists('ai_quality_optimization_level', $data)) {
+            $level = trim((string) $data['ai_quality_optimization_level']);
+            if (! in_array($level, ArticleAiOptimizationPolicy::strategies(), true)) {
+                $fieldErrors['ai_quality_optimization_level'] = 'AI 自动优化等级无效';
+            } else {
+                $output['ai_quality_optimization_level'] = $level;
+            }
+        } elseif (! $isUpdate) {
+            $output['ai_quality_optimization_level'] = ArticleAiOptimizationPolicy::STRATEGY_EXCELLENT_80;
+        }
+
+        if (array_key_exists('ai_quality_retrieval_mode', $data)) {
+            $mode = trim((string) $data['ai_quality_retrieval_mode']);
+            if (! AiQualityRetrievalMode::isValid($mode)) {
+                $fieldErrors['ai_quality_retrieval_mode'] = 'AI 质检方式无效';
+            } else {
+                $output['ai_quality_retrieval_mode'] = $mode;
+            }
+        }
+
+        if (array_key_exists('ai_quality_pass_score', $data)) {
+            $passScore = (int) $data['ai_quality_pass_score'];
+            if ($passScore < 1 || $passScore > 100) {
+                $fieldErrors['ai_quality_pass_score'] = 'AI 质检自动通过分必须在 1 到 100 之间';
+            } else {
+                $output['ai_quality_pass_score'] = $passScore;
+            }
+        } elseif (! $isUpdate) {
+            $output['ai_quality_pass_score'] = 85;
+        }
+
+        if (array_key_exists('ai_quality_manual_override_min_score', $data)) {
+            $manualScore = (int) $data['ai_quality_manual_override_min_score'];
+            if ($manualScore < 0 || $manualScore > 99) {
+                $fieldErrors['ai_quality_manual_override_min_score'] = 'AI 质检人工放行最低分必须在 0 到 99 之间';
+            } else {
+                $output['ai_quality_manual_override_min_score'] = $manualScore;
+            }
+        } elseif (! $isUpdate) {
+            $output['ai_quality_manual_override_min_score'] = 70;
+        }
+
+        if (isset($output['ai_quality_pass_score'], $output['ai_quality_manual_override_min_score'])
+            && $output['ai_quality_manual_override_min_score'] >= $output['ai_quality_pass_score']) {
+            $fieldErrors['ai_quality_manual_override_min_score'] = '人工放行最低分必须低于自动通过分';
+        }
+
+        if (! $isUpdate && ! empty($output['ai_quality_enabled'])) {
+            if (empty($output['ai_quality_prompt_id'])) {
+                $fieldErrors['ai_quality_prompt_id'] = '开启 AI 质检后必须选择质检方案';
+            }
+            if (empty($output['knowledge_base_ids'])) {
+                $fieldErrors['knowledge_base_ids'] = '开启 AI 质检后必须选择至少一个知识库';
             }
         }
 
@@ -536,7 +1517,7 @@ class TaskLifecycleService
 
         if (array_key_exists('category_mode', $data)) {
             $categoryMode = trim((string) $data['category_mode']);
-            if (! in_array($categoryMode, ['smart', 'fixed'], true)) {
+            if (! in_array($categoryMode, ['smart', 'fixed', 'random'], true)) {
                 $fieldErrors['category_mode'] = '分类模式无效';
             } else {
                 $output['category_mode'] = $categoryMode;
@@ -578,6 +1559,17 @@ class TaskLifecycleService
             $output['publish_scope'] = 'local_and_distribution';
         }
 
+        if (array_key_exists('distribution_strategy', $data)) {
+            $strategy = trim((string) $data['distribution_strategy']);
+            if (! in_array($strategy, TaskDistributionChannelSelector::strategies(), true)) {
+                $fieldErrors['distribution_strategy'] = '分发策略无效';
+            } else {
+                $output['distribution_strategy'] = $strategy;
+            }
+        } elseif (! $isUpdate) {
+            $output['distribution_strategy'] = TaskDistributionChannelSelector::STRATEGY_BROADCAST;
+        }
+
         $effectiveCategoryMode = $output['category_mode'] ?? (($data['category_mode'] ?? 'smart') ?: 'smart');
         if ($effectiveCategoryMode === 'fixed') {
             $fixedCategoryId = $output['fixed_category_id'] ?? null;
@@ -595,6 +1587,232 @@ class TaskLifecycleService
         return $output;
     }
 
+    private function accessAdmin(Admin|int|null $admin): ?Admin
+    {
+        if ($admin instanceof Admin) {
+            return $admin;
+        }
+        if ($admin === null || $admin <= 0) {
+            return null;
+        }
+
+        $accessAdmin = Admin::query()->find($admin);
+        if (! $accessAdmin instanceof Admin) {
+            throw new ApiException('ai_execution_admin_inactive', '执行管理员不可用', 409);
+        }
+
+        return $accessAdmin;
+    }
+
+    private function activationGuard(): TaskActivationGuard
+    {
+        return $this->taskActivationGuard ??= app(TaskActivationGuard::class);
+    }
+
+    /** @param array<string, mixed> $normalized */
+    private function assertSelectedModelsUsable(?Admin $accessAdmin, array $normalized): void
+    {
+        foreach (['ai_model_id', 'ai_quality_model_id'] as $field) {
+            $modelId = (int) ($normalized[$field] ?? 0);
+            if ($modelId <= 0) {
+                continue;
+            }
+            $model = AiModel::query()->find($modelId);
+            if (! $model instanceof AiModel) {
+                throw new ApiException(
+                    'ai_model_unavailable',
+                    '选择的 AI 模型当前不可用',
+                    409,
+                    ['field_errors' => [$field => '选择的 AI 模型当前不可用']],
+                );
+            }
+            if ((string) $model->status !== 'active'
+                || $model->archived_at !== null
+                || ! in_array((string) ($model->model_type ?? ''), ['', 'chat'], true)) {
+                throw new ApiException(
+                    'ai_model_unavailable',
+                    '选择的 AI 模型当前不可用',
+                    409,
+                    ['field_errors' => [$field => '选择的 AI 模型当前不可用']],
+                );
+            }
+            if ($accessAdmin instanceof Admin) {
+                $this->assertModelUsable($accessAdmin, $model, $field);
+            }
+        }
+    }
+
+    private function assertModelUsable(Admin $accessAdmin, AiModel $model, string $field): void
+    {
+        try {
+            $this->adminAiModelAccessResolver->assertUsable($accessAdmin, $model);
+        } catch (AiModelAccessException $exception) {
+            if ($exception->getErrorCode() === AiModelAccessException::AI_MODEL_NOT_ACCESSIBLE) {
+                throw new ApiException(
+                    $exception->getErrorCode(),
+                    '选择的 AI 模型不可访问',
+                    404,
+                    ['field_errors' => [$field => '选择的 AI 模型不可访问']],
+                );
+            }
+
+            throw new ApiException(
+                $exception->getErrorCode(),
+                '选择的 AI 模型当前不可用',
+                409,
+                ['field_errors' => [$field => '选择的 AI 模型当前不可用']],
+            );
+        }
+    }
+
+    /**
+     * @param  array<string,mixed>  $normalized
+     * @param  list<int>  $knowledgeBaseIds
+     */
+    private function assertEffectiveAiQualityConfiguration(
+        Task $current,
+        array $normalized,
+        array $knowledgeBaseIds,
+        bool $validateRetrievalReadiness = true,
+    ): void {
+        $enabled = array_key_exists('ai_quality_enabled', $normalized)
+            ? (bool) $normalized['ai_quality_enabled']
+            : (bool) $current->ai_quality_enabled;
+        if (! $enabled) {
+            return;
+        }
+
+        $promptId = array_key_exists('ai_quality_prompt_id', $normalized)
+            ? $normalized['ai_quality_prompt_id']
+            : $current->ai_quality_prompt_id;
+        $passScore = (int) ($normalized['ai_quality_pass_score'] ?? $current->ai_quality_pass_score ?? 85);
+        $manualScore = (int) ($normalized['ai_quality_manual_override_min_score'] ?? $current->ai_quality_manual_override_min_score ?? 70);
+        $fieldErrors = [];
+
+        $configuration = $this->taskConfigurationCapabilities(array_replace($current->getAttributes(), $normalized));
+        if ($configuration['optimization_requested'] && ! $configuration['optimization_available']) {
+            $fieldErrors['ai_quality_auto_optimize_enabled'] = implode(' ', array_column($configuration['optimization_blockers'], 'message'));
+        }
+        if ($configuration['sampling_requested'] && ! $configuration['sampling_supported']) {
+            $fieldErrors['ai_quality_timeout_sampling_enabled'] = __('admin.task_create.ai_quality.sampling_incompatible');
+        }
+
+        if (empty($promptId)) {
+            $fieldErrors['ai_quality_prompt_id'] = '开启 AI 质检后必须选择质检方案';
+        }
+        if ($knowledgeBaseIds === []) {
+            $fieldErrors['knowledge_base_ids'] = '开启 AI 质检后必须选择至少一个知识库';
+        }
+        if ($manualScore >= $passScore) {
+            $fieldErrors['ai_quality_manual_override_min_score'] = '人工放行最低分必须低于自动通过分';
+        }
+
+        $mode = array_key_exists('ai_quality_retrieval_mode', $normalized)
+            ? (string) $normalized['ai_quality_retrieval_mode']
+            : (string) ($current->ai_quality_retrieval_mode ?: AiQualityRetrievalMode::legacyDefault());
+        if (! AiQualityRetrievalMode::isValid($mode)) {
+            $fieldErrors['ai_quality_retrieval_mode'] = 'AI 质检方式无效';
+        } elseif ($validateRetrievalReadiness) {
+            $readiness = $this->aiQualityRetrievalReadinessService->inspect($knowledgeBaseIds);
+            if (! ($readiness['modes'][$mode]['available'] ?? false)) {
+                $fieldErrors['ai_quality_retrieval_mode'] = $this->retrievalBlockerMessage($readiness, $mode);
+            }
+        }
+
+        if ($fieldErrors !== []) {
+            throw new ApiException('validation_failed', '参数校验失败', 422, [
+                'field_errors' => $fieldErrors,
+            ]);
+        }
+    }
+
+    /** @param array<string,mixed> $task @return array<string,mixed> */
+    public function taskConfigurationCapabilities(array $task): array
+    {
+        $optimizationBlockers = [];
+        foreach ([
+            'ai_quality_optimization' => 'optimization',
+            'ai_quality_optimization_auto_apply' => 'auto_apply',
+        ] as $setting => $code) {
+            if (! (bool) config('geoflow.'.$setting.'_enabled', false)) {
+                $optimizationBlockers[] = ['code' => $code.'_disabled', 'message' => __('admin.task_create.ai_quality.'.$code.'_disabled')];
+            } elseif ((int) config('geoflow.'.$setting.'_percent', 0) !== 100) {
+                $optimizationBlockers[] = ['code' => $code.'_trial', 'message' => __('admin.task_create.ai_quality.'.$code.'_trial')];
+            }
+        }
+
+        $quality = (bool) ($task['ai_quality_enabled'] ?? false);
+        $optimizationRequested = $quality && (bool) ($task['ai_quality_auto_optimize_enabled'] ?? false);
+        $samplingRequested = $quality && (bool) ($task['ai_quality_timeout_sampling_enabled'] ?? false);
+        $mode = (string) ($task['ai_quality_retrieval_mode'] ?? AiQualityRetrievalMode::legacyDefault());
+        $samplingSupported = ! $optimizationRequested && in_array($mode, [AiQualityRetrievalMode::ATOMIC_FIRST, AiQualityRetrievalMode::CHUNK], true);
+
+        return [
+            'manual_review_required' => (bool) ($task['need_review'] ?? true),
+            'legacy_need_review_default' => true,
+            'base_risk_check_enabled' => true,
+            'ai_quality_enabled' => $quality,
+            'optimization_available' => $optimizationBlockers === [],
+            'optimization_state' => $optimizationBlockers === [] ? 'available' : (collect($optimizationBlockers)->contains(fn (array $blocker): bool => str_ends_with($blocker['code'], '_disabled')) ? 'unavailable' : 'trial'),
+            'optimization_blockers' => $optimizationBlockers,
+            'optimization_requested' => $optimizationRequested,
+            'optimization_enabled' => $optimizationRequested && $optimizationBlockers === [],
+            'sampling_requested' => $samplingRequested,
+            'sampling_supported' => $samplingSupported,
+            'sampling_enabled' => $samplingRequested && $samplingSupported,
+            'publish_interval_seconds' => max(60, (int) ($task['publish_interval'] ?? 3600)),
+            'paused' => ($task['status'] ?? 'paused') !== 'active',
+        ];
+    }
+
+    /** @param  array<string,mixed>  $readiness */
+    private function assertRetrievalModeAvailable(?string $mode, array $readiness): void
+    {
+        if (! AiQualityRetrievalMode::isValid($mode)) {
+            throw new ApiException('ai_quality_retrieval_mode_unavailable', '当前知识库没有可用的 AI 质检方式', 422, [
+                'field_errors' => ['ai_quality_retrieval_mode' => '当前知识库没有可用的 AI 质检方式'],
+                'retrieval_readiness' => $readiness,
+            ]);
+        }
+
+        if (! ($readiness['modes'][$mode]['available'] ?? false)) {
+            $message = $this->retrievalBlockerMessage($readiness, $mode);
+            throw new ApiException('ai_quality_retrieval_mode_unavailable', $message, 422, [
+                'field_errors' => ['ai_quality_retrieval_mode' => $message],
+                'retrieval_readiness' => $readiness,
+            ]);
+        }
+    }
+
+    /** @param  array<string,mixed>  $readiness */
+    private function retrievalBlockerMessage(array $readiness, string $mode): string
+    {
+        $blocker = $readiness['modes'][$mode]['blockers'][0] ?? null;
+        $knowledgeBaseName = trim((string) ($blocker['knowledge_base_name'] ?? ''));
+        $message = trim((string) ($blocker['message'] ?? '当前方式不可用'));
+
+        return $knowledgeBaseName !== '' ? $knowledgeBaseName.'：'.$message : $message;
+    }
+
+    /** @return list<int> */
+    private function currentTaskKnowledgeBaseIds(int $taskId, mixed $legacyKnowledgeBaseId): array
+    {
+        $ids = Schema::hasTable('task_knowledge_bases')
+            ? DB::table('task_knowledge_bases')
+                ->where('task_id', $taskId)
+                ->orderBy('sort_order')
+                ->pluck('knowledge_base_id')
+                ->map(static fn ($id): int => (int) $id)
+                ->all()
+            : [];
+
+        if ($ids === [] && (int) $legacyKnowledgeBaseId > 0) {
+            return [(int) $legacyKnowledgeBaseId];
+        }
+
+        return $ids;
+    }
+
     /**
      * 激活任务并确保调度配置就绪。
      *
@@ -602,12 +1820,30 @@ class TaskLifecycleService
      */
     private function activateTask(int $taskId, bool $resetNextRun): void
     {
-        $task = Task::query()->whereKey($taskId)->first(['id', 'next_run_at']);
+        $task = Task::query()->whereKey($taskId)->lockForUpdate()->first(['id', 'next_run_at', 'status', 'schedule_enabled', 'automation_version']);
         $updates = [
             'status' => 'active',
             'schedule_enabled' => 1,
             'updated_at' => now(),
         ];
+
+        if ($task && ($task->status !== 'active' || ! $task->schedule_enabled)) {
+            $updates['automation_version'] = (int) $task->automation_version + 1;
+            DB::afterCommit(static function () use ($taskId): void {
+                foreach ([
+                    fn () => app(DistributionOrchestrator::class)->resumeUnsentForTask($taskId),
+                    fn () => app(ArticlePublicationDeliveryService::class)->resumeForTask($taskId),
+                    fn () => app(HostedSiteAllocationRequestService::class)->resumeForTask($taskId),
+                    fn () => app(ArticleAiQualityReconciliationService::class)->resumeForTask($taskId),
+                ] as $resume) {
+                    try {
+                        $resume();
+                    } catch (\Throwable $exception) {
+                        report($exception);
+                    }
+                }
+            });
+        }
 
         if ($resetNextRun || $task?->next_run_at === null) {
             $updates['next_run_at'] = now();
@@ -624,12 +1860,21 @@ class TaskLifecycleService
      */
     private function pauseTask(int $taskId, string $reason): int
     {
+        $task = Task::query()->whereKey($taskId)->lockForUpdate()->firstOrFail();
+        $cycleChanged = $task->status !== 'paused' || (bool) $task->schedule_enabled;
         Task::query()->whereKey($taskId)->update([
+            'automation_version' => (int) $task->automation_version + ($cycleChanged ? 1 : 0),
+            'topic_config_version' => (int) $task->topic_config_version + ($task->content_type === 'topic' && $cycleChanged ? 1 : 0),
             'status' => 'paused',
             'schedule_enabled' => 0,
             'next_run_at' => null,
             'updated_at' => now(),
         ]);
+        if ($cycleChanged) {
+            Article::query()->where('task_id', $taskId)->where('publication_intent', 'immediate')
+                ->update(['publication_intent' => 'hold', 'workflow_version' => DB::raw('workflow_version + 1')]);
+        }
+        $this->articleAiQualityInvalidationService->cancelTaskOptimization($taskId, $reason);
 
         return TaskRun::query()
             ->where('task_id', $taskId)
@@ -651,6 +1896,83 @@ class TaskLifecycleService
         if (! Task::query()->whereKey($taskId)->exists()) {
             throw new ApiException('task_not_found', '任务不存在', 404);
         }
+    }
+
+    private function broadcastOverviewAfterCommit(): void
+    {
+        DB::afterCommit(fn () => $this->taskRealtimeBroadcastService->broadcastOverview());
+    }
+
+    /**
+     * @param  array<string,string>  $fieldErrors
+     * @return list<int>
+     */
+    private function normalizeKnowledgeBaseIds(mixed $value, array &$fieldErrors): array
+    {
+        if ($value === null || $value === '') {
+            return [];
+        }
+
+        if (! is_array($value)) {
+            $fieldErrors['knowledge_base_ids'] = '知识库选择格式无效';
+
+            return [];
+        }
+
+        $ids = collect($value)
+            ->map(static fn ($id): int => (int) $id)
+            ->filter(static fn (int $id): bool => $id > 0)
+            ->unique()
+            ->values();
+
+        if ($ids->count() > 5) {
+            $fieldErrors['knowledge_base_ids'] = '一个任务最多选择 5 个知识库';
+
+            return $ids->take(5)->all();
+        }
+
+        if ($ids->isEmpty()) {
+            return [];
+        }
+
+        $existingIds = KnowledgeBase::query()
+            ->whereIn('id', $ids->all())
+            ->pluck('id')
+            ->map(static fn ($id): int => (int) $id)
+            ->all();
+
+        if (count($existingIds) !== $ids->count()) {
+            $fieldErrors['knowledge_base_ids'] = '选择的知识库不存在';
+        }
+
+        return $ids->all();
+    }
+
+    /**
+     * @param  list<int>  $knowledgeBaseIds
+     */
+    private function syncTaskKnowledgeBases(int $taskId, array $knowledgeBaseIds): void
+    {
+        if (! Schema::hasTable('task_knowledge_bases')) {
+            return;
+        }
+
+        $task = Task::query()->whereKey($taskId)->first();
+        if (! $task) {
+            return;
+        }
+
+        $syncPayload = [];
+        foreach (array_values($knowledgeBaseIds) as $index => $knowledgeBaseId) {
+            $id = (int) $knowledgeBaseId;
+            if ($id <= 0) {
+                continue;
+            }
+
+            $syncPayload[$id] = ['sort_order' => $index];
+        }
+
+        $task->knowledgeBases()->sync($syncPayload);
     }
 
     /**

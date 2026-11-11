@@ -1,308 +1,283 @@
-# GEOFlow
+# GEOFlow 3.2.1
 
-> Languages: [简体中文](../../README.md) | [English](README_en.md) | [日本語](README_ja.md) | [Español](README_es.md) | [Русский](README_ru.md) | **Português (BR)**
+> Languages: [简体中文](../../README.md) | [English](README_en.md) | [日本語](README_ja.md) | [Español](README_es.md) | [Русский](README_ru.md) | [Português (BR)](README_pt_BR.md)
 
-> GEOFlow é um sistema open source de engenharia de conteúdo GEO (Generative Engine Optimization) e distribuição multi-site. Ele conecta bases de conhecimento, bibliotecas de materiais, prompts, tarefas de geração por IA, revisão e publicação, analytics, pacotes de sites-alvo GEOFlow Agent, canais WordPress REST e distribuição remota de páginas estáticas para transformar materiais confiáveis em ativos GEO publicáveis, rastreáveis e distribuíveis.
+## GEOFlow em 60 segundos
 
-[![PHP](https://img.shields.io/badge/PHP-8.2%2B-blue)](https://www.php.net/)
-[![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL-336791)](https://www.postgresql.org/)
-[![Docker](https://img.shields.io/badge/Docker-Compose-blue)](https://docs.docker.com/compose/)
-[![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](../../LICENSE)
+Veja como o GEOFlow conecta conhecimento confiável, criação de conteúdo com IA, controle de qualidade, revisão humana e publicação em vários sites em um único fluxo de trabalho.
+
+https://github.com/user-attachments/assets/8dbbf34e-e9c1-4139-977a-8e78394e34d9
+
+*Vídeo de 60 segundos em chinês*
+
+---
+
+> Plataforma GEO de código aberto para operar sites empresariais
+
+O GEOFlow conecta importação de conhecimento empresarial, artigos e tópicos com IA, seleção de imagens, controle de qualidade, revisão humana, distribuição multissite e análise de visibilidade em IA. Equipes de marca, crescimento e conteúdo podem operar sites corporativos, canais GEO, sites de referência ou plataformas internas, gerenciando fontes, versões de conteúdo, publicações e dados operacionais no mesmo painel.
+
+[Início rápido](#início-rápido) · [Prévia da interface](#prévia-da-interface) · [Principais recursos](#principais-recursos-do-geoflow-321) · [Guia de implantação](../deployment/DEPLOYMENT.md) · [Histórico de alterações](../CHANGELOG_en.md) · [Site oficial](https://www.geoflow.me)
+
+[![Source version](https://img.shields.io/badge/source-3.2.1-2563eb)](../../version.json)
+[![Latest release](https://img.shields.io/github/v/release/yaojingang/GEOFlow?display_name=tag)](https://github.com/yaojingang/GEOFlow/releases/latest)
+[![PHP](https://img.shields.io/badge/PHP-8.3%2B-777bb4)](https://www.php.net/)
+[![CI](https://github.com/yaojingang/GEOFlow/actions/workflows/ci.yml/badge.svg)](https://github.com/yaojingang/GEOFlow/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](../../LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/yaojingang/GEOFlow?style=social)](https://github.com/yaojingang/GEOFlow/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/yaojingang/GEOFlow?style=social)](https://github.com/yaojingang/GEOFlow/network/members)
-[![GitHub issues](https://img.shields.io/github/issues/yaojingang/GEOFlow)](https://github.com/yaojingang/GEOFlow/issues)
 
-O GEOFlow é lançado sob a [Licença Apache 2.0](../../LICENSE). Você pode usar, copiar, modificar e distribuir, inclusive para fins comerciais, desde que mantenha os avisos de direitos autorais e licença e cumpra os termos de patente, marca registrada e exoneração de garantia da Apache-2.0.
+> **Status da versão:** A versão atual do código-fonte é a versão estável `3.2.1`. Consulte [`version.json`](../../version.json) para a versão exata e [GitHub Releases](https://github.com/yaojingang/GEOFlow/releases) para os pacotes e as instruções de atualização. A branch `main` continua recebendo mudanças; fixe uma tag de versão ou um commit revisado ao implantar.
 
 ---
 
-## ✨ O Que Você Pode Fazer Com Ele
+## O problema que o GEOFlow resolve
 
-| Recurso | Descrição |
-|---------|-----------|
-| 🤖 Geração multi-modelo | APIs estilo OpenAI e endpoints nativos Gemini, modelos chat / embedding, adaptação de URL, failover inteligente, retries e estatísticas de uso |
-| 🧠 RAG de base de conhecimento | Chunking por regras, planejamento semântico opcional com LLM, fallback estável, vetores com embedding e recuperação de contexto durante a geração |
-| 🗂 Materiais e prompts | Títulos, palavras-chave, imagens, autores, bases de conhecimento, prompts de corpo e prompts especiais |
-| 📦 Automação de tarefas | Limites de geração, pool de rascunhos, revisão, cadência de publicação, filas, retries, escopo de publicação e filtros por tarefa |
-| 📋 Revisão e artigos | Rascunhos, revisão, publicação, lixeira, autores, categorias, SEO e origem da tarefa em um único fluxo |
-| 📡 Distribuição multi-site | Canais GEOFlow Agent e WordPress REST, segredos, pacotes de site-alvo, modo estático, regras rewrite, edição/exclusão remota, filas e logs |
-| 🧾 Pacotes de site-alvo | PHP Agent por canal com home, páginas de artigo, assets estáticos, sitemap, `llms.txt` / mapas TXT e Schema |
-| 📊 Analytics | Visão global, operação de site único, distribuição multi-site, logs de acesso, top conteúdos, crawlers de IA e tendências |
-| 🔍 Saída SEO e LLM-friendly | SEO, Open Graph, Schema, Markdown GFM, CSS independente, sincronização de imagens, sitemap e mapas TXT |
-| 🎨 Frontend e temas | Temas, preview, troca pelo admin e sincronização remota de título, copyright, tema e categorias |
-| 🌍 I18n do admin | Chinês, inglês, japonês, espanhol, russo e português, incluindo módulos GEOFlow 2.0 |
-| 🔔 Atualizações de versão | O admin pode verificar o `version.json` do GitHub e notificar quando uma versão mais recente está disponível |
-| 🐳 Pronto para deploy | **Docker Compose**: PostgreSQL (pgvector), Redis, app, fila, scheduler, Reverb e produção com Nginx/php-fpm |
+Uma operação GEO empresarial precisa administrar conhecimento de marca, modelos, produção de conteúdo, revisão de qualidade, engenharia do site, distribuição e análise. Quando cada atividade fica em uma ferramenta, a relação entre as fontes, as decisões de revisão e o resultado publicado se perde.
+
+O GEOFlow reúne esse fluxo em um único painel:
+
+```mermaid
+flowchart LR
+    A[Conhecimento e materiais confiáveis] --> B[Produção de conteúdo com IA]
+    B --> C[Controle de qualidade com IA]
+    C --> D[Revisão humana]
+    D --> E1[Site empresarial]
+    D --> E2[Sites hospedados e canais]
+    D --> E3[Publicação manual e Chrome]
+    E1 --> F[Análise de tráfego e visibilidade em IA]
+    E2 --> F
+    E3 --> F
+    F -. Aprendizado operacional .-> A
+```
+
+O sistema registra fontes de conhecimento, configuração de tarefas, chamadas de modelos, evidências de qualidade, liberações manuais, estado de publicação e logs dos canais.
 
 ---
 
-## 🖼 Preview da Interface
+## Prévia da interface
 
 <table>
   <tr>
-    <td width="34%" rowspan="3"><img src="../../docs/images/screenshots/analytics-en.png" alt="GEOFlow analytics preview" /><br /><sub>Analytics</sub></td>
-    <td width="33%" rowspan="2"><img src="../../docs/images/screenshots/site-settings-en.png" alt="GEOFlow site settings preview" /><br /><sub>Site Settings</sub></td>
-    <td width="33%"><img src="../../docs/images/screenshots/dashboard-en.png" alt="GEOFlow admin dashboard preview" /><br /><sub>Admin Dashboard</sub></td>
+    <td width="50%"><img src="../../resources/knowledge/ai-workspace/media/01-ai-workspace-start.webp" alt="Área de ajuda ilustrada do GEOFlow Admin UI V3" /><br /><sub>Área de ajuda ilustrada</sub></td>
+    <td width="50%"><img src="../../resources/knowledge/ai-workspace/media/03-analytics-overview.webp" alt="Visão analítica do GEOFlow Admin UI V3" /><br /><sub>Visão analítica</sub></td>
   </tr>
   <tr>
-    <td width="33%"><img src="../../docs/images/screenshots/tasks-en.png" alt="GEOFlow task management preview" /><br /><sub>Task Management</sub></td>
+    <td width="50%"><img src="../../resources/knowledge/ai-workspace/media/05-task-list.webp" alt="Gestão de tarefas no GEOFlow Admin UI V3" /><br /><sub>Gestão de tarefas</sub></td>
+    <td width="50%"><img src="../../resources/knowledge/ai-workspace/media/10-article-quality.webp" alt="Inspeção de qualidade de artigos com IA no GEOFlow Admin UI V3" /><br /><sub>Qualidade de artigos com IA</sub></td>
   </tr>
   <tr>
-    <td width="33%"><img src="../../docs/images/screenshots/ai-config-en.png" alt="GEOFlow AI model configuration preview" /><br /><sub>AI Model Configuration</sub></td>
-    <td width="33%"><img src="../../docs/images/screenshots/materials-en.png" alt="GEOFlow materials preview" /><br /><sub>Materials</sub></td>
+    <td width="50%"><img src="../../resources/knowledge/ai-workspace/media/19-hosted-sites.webp" alt="Sites de canal hospedados no GEOFlow Admin UI V3" /><br /><sub>Sites de canal hospedados</sub></td>
+    <td width="50%"><img src="../../resources/knowledge/ai-workspace/media/20-manual-publication.webp" alt="Área de publicação manual do GEOFlow Admin UI V3" /><br /><sub>Área de publicação manual</sub></td>
   </tr>
 </table>
 
-Essas telas cobrem o painel admin, analytics, tarefas, materiais, configuração de modelos e ajustes do site.
+Essas telas anonimizadas fazem parte da ajuda incluída no 3.0 e cobrem assistência, tarefas, inspeção de qualidade, sites hospedados, publicação manual e análise.
 
 ---
 
-## 🆕 Destaques da Nova Versão
+## Principais recursos do GEOFlow 3.2.1
 
-Destaques do GEOFlow 2.0:
+| Recurso | Fluxo atual |
+|---------|-------------|
+| Conhecimento e produção de conteúdo | Importa TXT, Markdown, DOCX, PDF e PPTX; gerencia conhecimento, títulos, palavras-chave, imagens, autores, prompts e modelos, com busca vetorial, seleção de imagens e testes de prompts em tempo real. |
+| Controle de qualidade com IA | Verifica fontes, dados, citações, regras publicitárias e contexto; registra notas, posições no texto, sugestões e histórico, com otimização automática, aprovação por nota e revisão humana. |
+| Tópicos e manutenção contínua | Organiza artigos existentes em tópicos com geração por IA, agrupamento, revisão, publicação e manutenção agendada; oferece cartões, guia de leitura e resumo cronológico. |
+| Revisão e colaboração | Gerencia rascunhos, publicação, lixeira e exportações; os canais web de Toutiao, Sohu e NetEase criam tarefas manuais, recebidas pelo assistente do Chrome e concluídas com comprovantes. |
+| Sites e distribuição multissite | Gera metadados SEO, Open Graph, Schema, arquivos de descoberta e URLs canônicas; oferece temas, vídeos curtos, sites hospedados, GEOFlow Agent, WordPress REST e APIs HTTP genéricas. |
+| Links e recomendações | Gerencia links internos e externos verificados para o site principal e os sites próprios hospedados, com campanhas por categoria ou palavra-chave e métricas de saída, visibilidade e cliques. |
+| Visibilidade em IA e operações | Analisa amostras de palavras-chave, tópicos, fontes, concorrentes, nuvens de palavras, tráfego e rastreadores; o Updater cuida de atualizações assinadas, backups completos, validação do ambiente e restauração. |
+| Equipes e desenvolvedores | Admin UI V3 oferece seis idiomas, layout responsivo, PWA e ajuda ilustrada; API v1, CLI e Agent Skill fornecem operações de conteúdo disponíveis, rascunhos remotos de temas e prévias assinadas. |
 
-- **Dashboard como hub operacional**: mantém o guia de três passos e organiza entradas por operação de site único, distribuição multi-site e skills complementares.
-- **Gemini e provedores OpenAI-compatible**: a configuração de modelos cobre rotas OpenAI-style e Gemini nativo para chat / embedding.
-- **Chunking semântico para conhecimento**: permite regras estruturadas, modo automático ou planejamento semântico opcional com LLM; o LLM planeja limites e os chunks finais são reconstruídos do texto original.
-- **Analytics independente**: visão global, operação de conteúdo, saúde de tarefas/materiais, status de distribuição, logs de acesso e tendências de crawlers de IA ficam em `/admin/analytics`.
-- **Distribuição ponta a ponta**: canais GEOFlow Agent e WordPress REST, segredos, testes de conexão, pacotes de site-alvo, modos estático/rewrite, sincronização de configurações remotas, filas, logs, edição e exclusão remota.
-- **Escopo de publicação explícito**: tarefas podem publicar localmente e em canais, somente em canais ou somente no GEOFlow local; o modo local desativa a seleção de canais.
-- **Sites-alvo podem ser estáticos**: a distribuição regenera home remota, páginas de artigo, sitemap, mapas TXT, `llms.txt`, imagens e CSS independente.
-- **Materiais e RAG mais completos**: chunks, status de vetorização, títulos, palavras-chave, imagens, autores e prompts formam a camada de entrada das tarefas.
-- **Deploy e segurança melhores**: Docker de produção usa Nginx + PHP-FPM, o seeder não sobrescreve admins existentes e mirrors Docker/Composer são configuráveis.
-- **Cobertura i18n para os módulos atuais**: módulos GEOFlow 2.0 não dependem mais de chaves cruas ou fallback em inglês.
+### Atualizações recentes incluídas na versão 3.2.1
 
----
+- Tópicos e tarefas de IA permitem agrupar, ordenar, criar em lote, revisar, publicar e manter artigos, com módulos na página inicial, navegação, links de retorno e entradas no Sitemap.
+- O conjunto de links inclui verificação de importações, campanhas, controles por site, adaptação e reversão de temas e métricas de saída, visibilidade para leitores e cliques.
+- Os testes de prompts em tempo real executam rascunhos não salvos com conhecimento e títulos selecionados, geram texto em streaming e permitem interromper a execução e localizar observações da IA no texto.
+- Bases de conhecimento e conhecimento empresarial extraem texto de PDF e PPTX, além de TXT, Markdown e DOCX; documentos digitalizados ou compostos por imagens precisam de OCR prévio.
+- A seleção de imagens usa notas e tags da biblioteca, respeita o limite da tarefa e recorre à inserção em intervalos quando o modelo não escolhe imagens.
+- A publicação em Toutiao, Sohu e NetEase usa tarefas manuais, o assistente do Chrome e comprovantes de resultado; uma pessoa confirma a publicação final.
+- A visibilidade em IA inclui classificação por tópicos, evidências de fontes e concorrentes, limpeza de nuvens de palavras e marcação de coletas bem-sucedidas nos últimos sete dias com nova coleta manual.
+- A biblioteca de temas reúne destaques, temas próprios e arquivados e vídeos curtos validados; os pacotes são compatíveis por padrão com 3.x e verificam versões mínimas e dependências.
+- As correções abrangem ações em lote, aprovação por nota da IA, publicação automática e embeddings multimodais da Volcengine, além de proxies de saída opcionais por host e atualizações de segurança.
 
-## 🏗 Fluxo de Execução
+Consulte [Links e testes de prompts](../operations/link-pool-and-prompt-test.md), [Importação de conhecimento](../knowledge-import.md), [Publicação assistida](../distribution/platform-web-assisted-publishing.md) e [Visibilidade em IA](../ai-visibility-operations.md). CLI e Skill mantêm suas próprias versões de prévia; o [escopo da gestão remota](../api/remote-management-preview.md) descreve os limites da publicação e reversão remotas de temas.
 
-```
-Admin
-  ↓
-Configuração IA / materiais / prompts / tarefas
-  ↓
-Scheduler / fila / worker executa IA
-  ↓
-Rascunho / Revisão / Publicação
-  ↓
-Artigos locais e páginas SEO
-  ↓
-Fila de distribuição / Agent do site-alvo
-  ↓
-Home remota, artigos, sitemap, mapas TXT e llms.txt
-```
+Consulte o [histórico em chinês](../CHANGELOG.md) e o [histórico em inglês](../CHANGELOG_en.md) para ver todas as alterações.
 
 ---
 
-## 🧱 Arquitetura
+## Cenários de uso
 
-| Camada | Descrição |
-|--------|------------|
-| Web / Admin | **Laravel**: rotas, controllers, site de artigos, **Blade** admin, analytics, distribuição, materiais e tarefas |
-| API / Agent | APIs locais e PHP Agent de sites-alvo para health check, receber/atualizar/excluir artigos, sincronizar configurações e gerar estáticos |
-| Scheduler / Fila / Reverb | **Scheduler**, **`queue:work` / Horizon** para geração e distribuição, se necessário **Reverb** |
-| Domínio e Jobs | `app/Services`, `app/Jobs`, `app/Http/Controllers` para IA, RAG, publicação, distribuição e análise de logs |
-| Armazenamento | **PostgreSQL** (recomendado **pgvector**) + **Redis** + JSON/arquivos estáticos nos sites-alvo |
+| Cenário | Configuração recomendada | Principais recursos |
+|---------|--------------------------|--------------------|
+| Operação GEO de site empresarial | Produzir continuamente a partir de produtos, casos, perguntas frequentes, conhecimento do setor e regras de marca | Conhecimento empresarial, tarefas, qualidade, publicação no site, análise |
+| Canal GEO em um site existente | Abrir um canal de informação, conhecimento ou soluções em um subdomínio ou caminho separado | Temas, categorias, SEO, agendamento, formulários de contato |
+| Site de referência setorial | Manter conteúdo verificável sobre um setor, tema ou problema | RAG, revisão, saída preparada para citações, sitemap, `llms.txt` |
+| Operação interna de conteúdo | Reduzir o peso do frontend público e centralizar produção e revisão das equipes | Materiais, API, CLI, publicação manual, permissões, auditoria |
+| Operação multimarcas ou multissite | Administrar vários sites, categorias ou destinos em um painel | Sites hospedados, Agent, WordPress, APIs genéricas, logs de distribuição |
 
-Fluxo principal: configuração de modelos e prompts → preparação de base de conhecimento, títulos, palavras-chave, imagens e autores → tarefas na fila → workers geram conteúdo → rascunho / revisão / publicação → páginas SEO locais → distribuição para canais selecionados → analytics de produção, distribuição, acesso e crawlers de IA.
-
----
-
-## ⚡ Início Rápido no Admin
-
-1. **Configure a API**: adicione pelo menos um modelo de chat; para RAG, adicione um modelo de embedding e escolha uma estratégia de chunking.
-2. **Configure materiais**: prepare base de conhecimento, títulos, palavras-chave, imagens e autores com base em informações reais e verificáveis.
-3. **Crie uma tarefa**: escolha materiais, modelo, volume de geração, frequência e escopo de publicação; primeiro teste o fluxo via rascunhos ou revisão.
+O GEOFlow foi projetado para equipes com materiais empresariais reais, responsáveis de revisão definidos e um plano contínuo de operação. A qualidade do conhecimento, o julgamento humano e a manutenção regular sustentam a confiança de usuários e sistemas de IA.
 
 ---
 
-## 🎯 Casos de Uso e Resultados Esperados
+## Segurança e governança
 
-O GEOFlow é adequado para estes cenários práticos:
+| Área | Limite de projeto |
+|------|-------------------|
+| Qualidade do conteúdo | Evidências, versões de regras, notas, liberações manuais e expiração de resultados podem ser rastreadas. |
+| Contas e permissões | Os acessos seguem permissões, ações sensíveis exigem superadministrador e as mudanças de estado mantêm histórico. |
+| Operação no navegador | A extensão usa pareamento e Token com privilégio mínimo. Ela não armazena senhas, cookies ou credenciais OAuth de plataformas externas. |
+| Requisições externas | Importação, distribuição, IA, referências de temas e verificações de atualização usam uma política que limita redes privadas, redirecionamentos e tamanho de resposta. |
+| Atualização e recuperação | O Updater usa pacotes assinados, Unix socket local, validação, backups completos e pontos de restauração. Solicitações de alto risco exigem segundo fator. |
+| Telemetria anônima | Vem desativada. Quando ativada, envia somente campos permitidos e exclui conteúdo, contas, e-mails, domínios, cookies e segredos. |
 
-- **Site GEO independente**
-  Organize conteúdo de produto, FAQs, casos e conhecimento de marca em um sistema sustentável. O objetivo é melhorar visibilidade em buscas com IA e eficiência operacional, não criar páginas fracas em massa.
-- **Subcanal GEO em um site oficial**
-  Adicione um canal de notícias, conhecimento ou soluções dentro de um site existente. Estruture o conteúdo para busca, citações e atualização em equipe.
-- **Site-fonte GEO independente**
-  Publique explicações, rankings, guias e referências de qualidade sobre um setor ou tema. Construa ativos confiáveis, não ruído na web.
-- **Gestão interna de conteúdo GEO**
-  Use como backend de produção para modelos, materiais, conhecimento, revisão e publicação. Reduza a dispersão de ferramentas e aumente a eficiência da equipe.
-- **GEO multi-site / multi-seção**
-  Opere múltiplos canais, marcas ou modelos com um padrão operacional comum.
-- **Gestão automatizada de fontes e distribuição**
-  Estruture bases de conhecimento, atualizações temáticas e distribuição para manter informação valiosa recuperável.
-
-O valor deve partir de uma **base de conhecimento real, confiável e mantida continuamente**.
-O GEOFlow não deve ser usado para fabricar ruído, poluir a internet ou publicar afirmações falsas. Ele existe para ajudar equipes a produzir e distribuir conteúdo **confiável** e melhorar a eficiência operacional de GEO.
+O [guia de implantação](../deployment/DEPLOYMENT.md) e as notas da versão escolhida definem os controles e o processo de atualização vigentes.
 
 ---
 
-## 🧭 Padrões Sugeridos de Deploy e Uso
+## Componentes e ambiente
 
-- **Como site GEO independente**
-  Publique frontend e admin completos; opere produtos, FAQ, casos e temas como uma propriedade própria.
-- **Como subcanal GEO**
-  Use subdiretório, subdomínio ou canal lateral sem reconstruir o site principal.
-- **Como site-fonte GEO**
-  Priorize a base de conhecimento e use tarefas para atualizações controladas e contínuas.
-- **Como backend GEO interno**
-  Dê menos foco ao site público e concentre-se em admin, modelos, materiais, agendamento, revisão e APIs.
-- **Como sistema multi-site ou multicanal**
-  Reutilize workflows entre marcas, temas e experimentos.
-- **Como camada de gestão automatizada de fontes**
-  Trate bibliotecas de títulos, imagens, prompts e conhecimento como infraestrutura de longo prazo.
+| Componente | Versão ou estado atual do código | Descrição |
+|------------|----------------------------------|-----------|
+| GEOFlow Core | `3.2.1` | Aplicação Laravel, painel, frontend, API, filas e distribuição |
+| GEOFlow CLI | `0.4.0-preview.2` | Incluído como `bin/geoflow`; compatível com macOS, Linux e WSL |
+| Assistente do Chrome | `0.1.0` | Código e pacote em `browser-extension/` e `dist/browser-extension/` |
+| GEOFlow Updater | Componente independente | Use uma versão assinada compatível com a versão alvo; consulte [geoflow-updater](https://github.com/yaojingang/geoflow-updater) |
+| Agent de destino | Gerado por canal | Cria um pacote PHP configurado com página inicial, artigos, recursos, Schema, sitemap e `llms.txt` |
 
-Ordem recomendada:
+Requisitos:
 
-1. Defina objetivos reais e público-alvo
-2. Construa a base de conhecimento antes de automatizar em escala
-3. Mantenha o conteúdo correto, verificável e sustentável
-4. Só depois escale com modelos, tarefas e templates
-
-Uma base de conhecimento fraca com automação forte apenas escala ruído. No GEOFlow, **a qualidade da base de conhecimento vem primeiro**.
+| Componente | Requisito |
+|------------|-----------|
+| PHP | 8.3 ou superior; o Docker pode usar PHP 8.4 |
+| Banco de dados | PostgreSQL; recomenda-se pgvector ou extensão compatível |
+| Redis | Filas, cache e estado de execução |
+| Node.js | Build do frontend; o CI usa Node.js 22 |
+| Contêineres | Docker Compose; produção usa Nginx e php-fpm |
 
 ---
 
-## 🚀 Deploy com Docker Compose
+## Início rápido
 
-### Configuração Rápida
+### Docker para desenvolvimento e avaliação
 
-1. Clone o projeto:
 ```bash
 git clone https://github.com/yaojingang/GEOFlow.git
 cd GEOFlow
-```
-
-2. Copie o arquivo de ambiente:
-```bash
 cp .env.example .env
+docker compose build
+docker compose up -d --remove-orphans
 ```
 
-3. Inicie os containers:
+- Frontend: `http://localhost:18080`
+- Painel: `http://localhost:18080/geo_admin/login`
+- `APP_PORT` controla a porta e `ADMIN_BASE_PATH` controla o prefixo do painel.
+- O serviço `init` executa as migrações e inicializa um banco vazio na primeira execução.
+
+O [guia de implantação](../deployment/DEPLOYMENT.md) documenta a conta de desenvolvimento. Em produção, defina senha de administrador, HTTPS, cookies seguros e proxy reverso.
+
+### Docker para produção
+
+A produção usa `docker-compose.prod.yml` com Nginx e php-fpm. Prepare `.env.prod`, backups do banco, HTTPS, diretórios persistentes e supervisão de processos:
+
 ```bash
-docker compose up -d
+cp .env.prod.example .env.prod
+
+docker compose --env-file .env.prod -f docker-compose.prod.yml build
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d postgres redis
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d init
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d app web queue ai-quality-queue ai-quality-backfill-queue knowledge-queue scheduler reverb
 ```
 
-Acesse `http://localhost:18080` (frontend) e `http://localhost:18080/geo_admin` (admin).
+Consulte [`docs/deployment/DEPLOYMENT.md`](../deployment/DEPLOYMENT.md) para produção, verificações de saúde, proxy reverso e recuperação.
 
-Para produção, configure `.env.prod` e use `docker compose -f docker-compose.prod.yml up -d`. O serviço `init` de produção executa as migrações e o `db:seed` inicial para criar a conta admin padrão; execuções repetidas não sobrescrevem o usuário `admin` existente.
+### Atualização a partir do 2.x
 
-### portas
+Faça backup do banco, `.env`, uploads e `storage`. Interrompa os processos antigos e aguarde a conclusão antes de migrar, recompilar o frontend e reiniciar os serviços. Instalações iniciais do 2.x também precisam da verificação de imagens gerenciadas e da auditoria de segurança. Ative sites hospedados depois de configurar DNS e TLS curinga, proxies confiáveis e Nginx.
 
-| Serviço | Porta |
-|---------|-------|
-| App (development) | 18080 |
-| App (production nginx) | 18080 |
-| Postgres | 15432 |
-| Redis | 16379 |
-| Reverb | 18081 |
+Instalações existentes devem seguir o [procedimento seguro de interrupção e migração](../deployment/DEPLOYMENT.md). Evite reconstruir contêineres imediatamente após `git pull`. Os comandos exatos e a compatibilidade seguem a versão escolhida no GitHub Releases.
 
 ---
 
-## 🧩 Notas de Deploy por Código-Fonte
+## Acesso para desenvolvedores
+
+### GEOFlow CLI
+
+O `bin/geoflow` gerencia catálogos, tarefas, execuções, materiais e artigos pela API v1. Oferece configuração segura, login, arquivos JSON ou stdin, confirmação de exclusão e erros estruturados.
+
+[Guia CLI em chinês](../GEOFLOW_CLI.md) | [Guia CLI em inglês](../GEOFLOW_CLI_en.md)
+
+### GEOFlow Agent Skill
+
+O repositório inclui o [GEOFlow Agent Skill](../../.agents/skills/geoflow/) para desenvolvimento Laravel, operações do painel, frontend público, pacotes de temas, sites de canal e migrações legadas. Ferramentas compatíveis podem descobri-lo no repositório, e usuários do Codex podem chamá-lo com `$geoflow`.
+
+Consulte o [README do Skill](../../.agents/skills/geoflow/README.md) para instalação e restauração.
+
+### Desenvolvimento e testes
 
 ```bash
-chmod -R ug+rwx storage bootstrap/cache
-```
-
-**Admin padrão** após `php artisan db:seed`:
-
-| Campo | Valor |
-|-------|-------|
-| Usuário | `GEOFLOW_ADMIN_USERNAME`, padrão `admin` |
-| Senha | Em desenvolvimento local, o padrão é `password`; em produção defina `GEOFLOW_ADMIN_PASSWORD`. Se ficar vazio e a conta ainda não existir, o seeder gera uma senha aleatória de uso único nos logs de init / `db:seed`. |
-
-O seeder só cria a conta quando o usuário alvo não existe. Execuções repetidas nunca sobrescrevem usuário, email ou senha existentes.
-
-### Bloqueio de login admin e desbloqueio manual
-
-- Contas admin são bloqueadas após **5** tentativas consecutivas de login inválido.
-- Contas bloqueadas precisam ser desbloqueadas por um administrador.
-- Comando de desbloqueio:
-
-```bash
-php artisan geoflow:admin-unlock <username>
-```
-
-**HTTP em produção:** use Nginx/Apache + **PHP-FPM**, com document root em **`public/`**. Não exponha a raiz do projeto como web root.
-
----
-
-## 🐳 Notas de Deploy Docker
-
-### Serviços do Compose de desenvolvimento
-
-| Serviço | Papel |
-|---------|-------|
-| `postgres` | PostgreSQL 16 + pgvector |
-| `redis` | Redis 7 |
-| `init` | Bootstrap único (`restart: "no"`) |
-| `app` | `php artisan serve`, mapeia **`${APP_PORT:-18080}:8080`** |
-| `queue` | `queue:work redis` |
-| `scheduler` | `schedule:work` |
-| `reverb` | WebSocket, mapeia **`${REVERB_EXPOSE_PORT:-18081}:8080`** |
-
-Para produção, use a pilha **`docker-compose.prod.yml`** com Nginx + php-fpm e consulte `../deployment/DEPLOYMENT.md`.
-
-**Atualização:** `git pull` → `docker compose build` → `docker compose up -d`.
-
----
-
-## Desenvolvimento e Testes
-
-```bash
+composer install
+npm ci
+npm run build
 composer test
-./vendor/bin/pint
+npm run test:analytics
+vendor/bin/pint --test
 ```
 
----
-
-## 📖 Documentação
-
-- [Documentação completa](../README.md)
-- [Changelog](../CHANGELOG.md)
+Leia o [guia de contribuição](../../CONTRIBUTING.md) antes de enviar alterações.
 
 ---
 
-## ❤️ Agradecimentos
+## Licença de código aberto e licença comercial
 
-- [Laravel](https://laravel.com/) - O framework PHP
-- [Laravel AI SDK](https://laravel.com/ai) - Integração com AI
-- [Laravel Horizon](https://laravel.com/horizon) - Gerenciamento de fila
-- [Laravel Reverb](https://laravel.com/reverb) - WebSocket
-- [pgvector](https://github.com/pgvector/pgvector) - Vetores no PostgreSQL
+A versão atual do GEOFlow é publicada sob a [GNU Affero General Public License v3.0](../../LICENSE). Versões publicadas anteriormente sob Apache-2.0 mantêm a licença original; o texto histórico está em [`docs/licenses/Apache-2.0.txt`](../licenses/Apache-2.0.txt).
+
+**Pessoas e empresas podem usar a edição de código aberto do GEOFlow sem pagar pela licença, inclusive para fins comerciais.** Os cenários abaixo dispensam uma licença comercial adicional do GEOFlow quando os termos da AGPL-3.0 são cumpridos. O uso interno em uma empresa, a prestação de serviços a clientes e a cobrança por esses serviços, por si só, não exigem a compra de uma licença comercial.
+
+| Cenário de uso | Condições de licença |
+|----------------|----------------------|
+| Aprendizado pessoal, pesquisa, ensino, avaliação e testes | Uso, implantação e modificação gratuitos |
+| Gestão interna de conhecimento, produção de conteúdo, inspeção de qualidade com IA e colaboração em equipe | Implantação gratuita para funcionários, inclusive em empresas com fins lucrativos |
+| Operação de site corporativo, site de marca, subcanal GEO ou site de referência setorial próprio | Uso gratuito, inclusive em operações comerciais |
+| Agências, estúdios ou consultorias que produzem conteúdo ou gerenciam operações de conteúdo para clientes | Uso gratuito; é permitido cobrar pela produção de conteúdo, consultoria e serviços de operação |
+| Prestação de serviços de implantação, treinamento, manutenção ou desenvolvimento sob medida para clientes | Uso gratuito e possibilidade de cobrar pelos serviços; a entrega de cópias do software deve cumprir as obrigações aplicáveis da AGPL quanto à distribuição e ao fornecimento do código-fonte |
+| Oferta de hospedagem ou serviços on-line (SaaS) com base no GEOFlow | Uso gratuito e possibilidade de cobrar pelos serviços; versões modificadas oferecidas pela rede devem disponibilizar aos usuários que interagem com elas uma forma gratuita de obter o código-fonte correspondente completo |
+| Desenvolvimento sob medida, redistribuição e personalização de marca ou entrega OEM em conformidade com a AGPL | Uso gratuito; preserve os avisos exigidos e cumpra as obrigações aplicáveis de manter a mesma licença e fornecer o código-fonte. Os direitos de marca devem ser avaliados separadamente. |
+| Necessidade de exceção às obrigações de código-fonte ou a outras condições da AGPL, como soluções de marca branca, OEM ou integrações proprietárias que exijam manter o código fechado quando essas obrigações forem aplicáveis | Solicite uma licença comercial separada ao titular dos direitos e use o software conforme o acordo assinado |
+
+Antes de usar o GEOFlow:
+
+- **O uso interno em empresas também está sujeito às condições aplicáveis.** Se os funcionários interagem pela rede com uma versão modificada do GEOFlow, a seção 13 da AGPL exige oferecer, de forma destacada, um meio gratuito de obter o código-fonte correspondente completo. A mesma exigência vale para serviços de rede modificados oferecidos a usuários externos. Quem deve receber a oferta do código depende da forma de uso e distribuição; a licença não exige sua publicação em um repositório público do GitHub, e os destinatários mantêm os direitos de redistribuição previstos na licença.
+- **Dados de negócio e código-fonte são avaliados separadamente.** Materiais independentes da base de conhecimento, dados de clientes e artigos gerados geralmente não precisam ser divulgados sob a AGPL apenas pelo uso do GEOFlow. Se a saída contiver código do programa ou outras obras abrangidas pela licença, a avaliação depende do conteúdo.
+- **Gratuito refere-se à licença do software.** Servidores, domínios, chamadas a APIs de modelos, serviços de terceiros e suporte técnico contratado separadamente ficam por conta do usuário.
+
+Estes exemplos explicam a licença existente e não acrescentam exceções. Os direitos e as obrigações aplicáveis são definidos em [LICENSE](../../LICENSE); consulte a [seção 13 da AGPL](https://www.gnu.org/licenses/agpl-3.0.html#section13) e a [explicação do GNU sobre a saída dos programas](https://www.gnu.org/licenses/gpl-faq.en.html#WhatCaseIsOutputGPL). Recomenda-se uma avaliação jurídica prévia para integrações proprietárias complexas ou entregas que envolvam várias entidades.
+
+Inicie uma consulta comercial por um [GitHub Issue](https://github.com/yaojingang/GEOFlow/issues/new). Issues são públicos, então não inclua contratos, preços, dados de clientes ou informações confidenciais. Após o contato inicial, a conversa pode seguir por um canal privado. O texto da licença e qualquer acordo assinado definem as obrigações aplicáveis.
+
+Colaboradores externos mantêm os direitos autorais sobre suas contribuições e devem aceitar o [GEOFlow Contributor License Agreement v1.0](../../CLA.md) antes do merge. O CLA permite manter a edição AGPL e oferecer licenças comerciais separadas.
+
+### Telemetria anônima
+
+A telemetria anônima vem desativada. Quando o responsável pela implantação a ativa e configura um endpoint HTTPS, uma página autenticada do painel envia no máximo um evento de atividade por dia. Os dados se limitam a um ID aleatório da instância, um resumo irreversível do administrador, a versão do GEOFlow e o tipo de evento.
+
+```dotenv
+GEOFLOW_TELEMETRY_ENABLED=false
+```
+
+Não são enviados domínios, caminhos, contas, e-mails, artigos, cookies, `APP_KEY` ou segredos empresariais. Nenhuma requisição é feita quando o endpoint está vazio.
 
 ---
 
-## 📄 Licença
+## Outros idiomas
 
-GEOFlow é software livre sob a [Licença Apache 2.0](../../LICENSE).
-
----
-
-## 🌍 README em Outros Idiomas
-
-- [简体中文](../../README.md)
-- [English](README_en.md)
-- [日本語](README_ja.md)
-- [Español](README_es.md)
-- [Русский](README_ru.md)
+- [简体中文 README](../../README.md)
+- [English README](README_en.md)
+- [日本語 README](README_ja.md)
+- [Español README](README_es.md)
+- [Русский README](README_ru.md)
 
 ---
 
-<p align="center">
-  <a href="https://github.com/yaojingang/GEOFlow">
-    <img src="https://img.shields.io/github/stars/yaojingang/GEOFlow?style=flat" alt="GitHub Stars" />
-  </a>
-  <a href="https://github.com/yaojingang/GEOFlow">
-    <img src="https://img.shields.io/github/forks/yaojingang/GEOFlow?style=flat" alt="GitHub Forks" />
-  </a>
-  <a href="https://github.com/yaojingang/GEOFlow/issues">
-    <img src="https://img.shields.io/github/issues/yaojingang/GEOFlow?style=flat" alt="GitHub Issues" />
-  </a>
-</p>
+## Histórico de estrelas
 
-## ⭐ Histórico de Stars
-
-[![Star History Chart](https://api.star-history.com/svg?repos=yaojingang/GEOFlow&type=Date)](https://star-history.com/#yaojingang/GEOFlow&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=yaojingang/GEOFlow&type=Date)](https://star-history.dera.page/#yaojingang/GEOFlow&Date)

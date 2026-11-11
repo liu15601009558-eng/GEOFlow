@@ -5,11 +5,11 @@
         $schemaAtContext = chr(64).'context';
         $schemaAtType = chr(64).'type';
         $schemaItems = [];
-        foreach ((method_exists($articles, 'getCollection') ? $articles->getCollection() : collect($articles))->take(10) as $schemaArticle) {
+        foreach ((is_object($articles ?? null) && method_exists($articles, 'getCollection') ? $articles->getCollection() : collect($articles ?? []))->take(10) as $schemaArticle) {
             $schemaItems[] = [
                 $schemaAtType => 'ListItem',
                 'position' => count($schemaItems) + 1,
-                'url' => route('site.article', $schemaArticle->slug),
+                'url' => $siteUrls->article($schemaArticle),
                 'name' => $schemaArticle->title,
             ];
         }
@@ -25,9 +25,7 @@
             ],
         ];
     @endphp
-    <script type="application/ld+json">
-        {!! json_encode($collectionSchema, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT) !!}
-    </script>
+    <x-json-ld :data="$collectionSchema" />
 @endpush
 
 @section('content')

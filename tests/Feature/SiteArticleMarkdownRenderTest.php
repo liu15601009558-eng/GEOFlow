@@ -9,6 +9,7 @@ use App\Models\SiteSetting;
 use App\Support\Site\ArticleHtmlPresenter;
 use App\Support\Site\SiteSettingsBag;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
 class SiteArticleMarkdownRenderTest extends TestCase
@@ -39,6 +40,16 @@ MD);
         $this->assertStringContainsString('type="checkbox"', $html);
     }
 
+    public function test_homepage_renders_before_lead_forms_table_is_migrated(): void
+    {
+        Schema::dropIfExists('lead_submissions');
+        Schema::dropIfExists('lead_forms');
+
+        $this->get(route('site.home'))
+            ->assertOk()
+            ->assertSee(__('site.home_latest'));
+    }
+
     public function test_published_article_page_outputs_normalized_image_url(): void
     {
         $category = Category::query()->create([
@@ -66,6 +77,356 @@ MD);
             ->assertSee('src="/storage/uploads/images/2026/04/demo.png"', false)
             ->assertSee('<table class="article-table">', false)
             ->assertDontSee('333.png', false);
+    }
+
+    public function test_published_article_page_uses_article_seo_metadata(): void
+    {
+        SiteSetting::query()->updateOrCreate(
+            ['setting_key' => 'site_name'],
+            ['setting_value' => 'GEOFlow Support']
+        );
+        SiteSetting::query()->updateOrCreate(
+            ['setting_key' => 'site_description'],
+            ['setting_value' => 'Default site description']
+        );
+        SiteSetting::query()->updateOrCreate(
+            ['setting_key' => 'site_keywords'],
+            ['setting_value' => 'site,default']
+        );
+        SiteSettingsBag::forget();
+
+        $category = Category::query()->create([
+            'name' => '科技资讯',
+            'slug' => 'tech-seo',
+        ]);
+        $author = Author::query()->create([
+            'name' => 'GEOFlow',
+        ]);
+        $article = Article::query()->create([
+            'title' => 'Article SEO Title',
+            'slug' => 'article-seo-title',
+            'excerpt' => 'Article SEO Description',
+            'content' => '正文',
+            'keywords' => 'alpha,beta',
+            'category_id' => $category->id,
+            'author_id' => $author->id,
+            'status' => 'published',
+            'review_status' => 'approved',
+            'is_ai_generated' => 1,
+            'published_at' => now(),
+        ]);
+
+        $this->get(route('site.article', $article->slug))
+            ->assertOk()
+            ->assertSee('<title>Article SEO Title</title>', false)
+            ->assertDontSee('<title>Article SEO Title - GEOFlow Support</title>', false)
+            ->assertSee('<meta name="description" content="Article SEO Description">', false)
+            ->assertSee('<meta name="keywords" content="alpha,beta">', false)
+            ->assertSee('<meta property="og:title" content="Article SEO Title">', false)
+            ->assertSee('<meta property="og:description" content="Article SEO Description">', false)
+            ->assertSee('<meta property="og:type" content="article">', false)
+            ->assertSee('<meta property="og:site_name" content="GEOFlow Support">', false);
+    }
+
+    public function test_theme_article_page_renders_array_based_sticky_ad(): void
+    {
+        SiteSetting::query()->updateOrCreate(
+            ['setting_key' => 'active_theme'],
+            ['setting_value' => 'tdwh-netease-news-en-20260508']
+        );
+        SiteSetting::query()->updateOrCreate(
+            ['setting_key' => 'article_detail_ads'],
+            ['setting_value' => json_encode([
+                [
+                    'id' => 'test_ad',
+                    'badge' => 'Demo',
+                    'title' => 'Demo CTA',
+                    'copy' => 'Array based sticky ad copy',
+                    'button_text' => 'Read more',
+                    'button_url' => '/category/tech',
+                    'enabled' => true,
+                ],
+            ], JSON_UNESCAPED_UNICODE)]
+        );
+        SiteSettingsBag::forget();
+
+        $category = Category::query()->create([
+            'name' => '科技资讯',
+            'slug' => 'tech',
+        ]);
+        $author = Author::query()->create([
+            'name' => 'GEOFlow',
+        ]);
+        $article = Article::query()->create([
+            'title' => 'Sticky Ad 渲染测试',
+            'slug' => 'sticky-ad-render-test',
+            'excerpt' => '',
+            'content' => '## 正文',
+            'category_id' => $category->id,
+            'author_id' => $author->id,
+            'status' => 'published',
+            'review_status' => 'approved',
+            'is_ai_generated' => 1,
+            'published_at' => now(),
+        ]);
+
+        $this->get(route('site.article', $article->slug))
+            ->assertOk()
+            ->assertSee('Demo CTA')
+            ->assertSee('Array based sticky ad copy')
+            ->assertSee('Read more');
+    }
+
+    public function test_theme_article_page_skips_unsafe_sticky_ad_and_renders_next_valid_ad(): void
+    {
+        SiteSetting::query()->updateOrCreate(
+            ['setting_key' => 'active_theme'],
+            ['setting_value' => 'tdwh-netease-news-en-20260508']
+        );
+        SiteSetting::query()->updateOrCreate(
+            ['setting_key' => 'article_detail_ads'],
+            ['setting_value' => json_encode([
+                [
+                    'id' => 'unsafe-ad',
+                    'badge' => 'Unsafe',
+                    'title' => 'Unsafe CTA',
+                    'copy' => 'Unsafe sticky ad copy',
+                    'button_text' => 'Unsafe link',
+                    'button_url' => '//evil.example/demo',
+                    'enabled' => true,
+                ],
+                [
+                    'id' => 'safe-ad',
+                    'badge' => 'Safe',
+                    'title' => 'Safe CTA',
+                    'copy' => 'Safe sticky ad copy',
+                    'button_text' => 'Safe link',
+                    'button_url' => '/category/tech',
+                    'enabled' => true,
+                ],
+            ], JSON_UNESCAPED_UNICODE)]
+        );
+        SiteSettingsBag::forget();
+
+        $category = Category::query()->create([
+            'name' => '科技资讯',
+            'slug' => 'tech',
+        ]);
+        $author = Author::query()->create([
+            'name' => 'GEOFlow',
+        ]);
+        $article = Article::query()->create([
+            'title' => 'Sticky Ad 安全回退测试',
+            'slug' => 'sticky-ad-safe-fallback-test',
+            'excerpt' => '',
+            'content' => '## 正文',
+            'category_id' => $category->id,
+            'author_id' => $author->id,
+            'status' => 'published',
+            'review_status' => 'approved',
+            'is_ai_generated' => 1,
+            'published_at' => now(),
+        ]);
+
+        $this->get(route('site.article', $article->slug))
+            ->assertOk()
+            ->assertSee('Safe CTA')
+            ->assertSee('Safe sticky ad copy')
+            ->assertSee('href="/category/tech"', false)
+            ->assertDontSee('Unsafe CTA')
+            ->assertDontSee('evil.example');
+    }
+
+    public function test_theme_article_page_omits_sticky_ad_when_all_enabled_ads_are_unsafe(): void
+    {
+        SiteSetting::query()->updateOrCreate(
+            ['setting_key' => 'active_theme'],
+            ['setting_value' => 'tdwh-netease-news-en-20260508']
+        );
+        SiteSetting::query()->updateOrCreate(
+            ['setting_key' => 'article_detail_ads'],
+            ['setting_value' => json_encode([
+                [
+                    'id' => 'protocol-relative-ad',
+                    'badge' => 'Unsafe',
+                    'title' => 'Protocol-relative CTA',
+                    'copy' => 'Protocol-relative sticky ad copy',
+                    'button_text' => 'Unsafe link',
+                    'button_url' => '//evil.example/demo',
+                    'enabled' => true,
+                ],
+                [
+                    'id' => 'script-ad',
+                    'badge' => 'Unsafe',
+                    'title' => 'Script CTA',
+                    'copy' => 'Script sticky ad copy',
+                    'button_text' => 'Unsafe script',
+                    'button_url' => 'javascript:alert(1)',
+                    'enabled' => true,
+                ],
+            ], JSON_UNESCAPED_UNICODE)]
+        );
+        SiteSettingsBag::forget();
+
+        $category = Category::query()->create([
+            'name' => '科技资讯',
+            'slug' => 'tech',
+        ]);
+        $author = Author::query()->create([
+            'name' => 'GEOFlow',
+        ]);
+        $article = Article::query()->create([
+            'title' => 'Sticky Ad 全量拦截测试',
+            'slug' => 'sticky-ad-all-unsafe-test',
+            'excerpt' => '',
+            'content' => '## 正文',
+            'category_id' => $category->id,
+            'author_id' => $author->id,
+            'status' => 'published',
+            'review_status' => 'approved',
+            'is_ai_generated' => 1,
+            'published_at' => now(),
+        ]);
+
+        $this->get(route('site.article', $article->slug))
+            ->assertOk()
+            ->assertDontSee('class="ne-ad-slot"', false)
+            ->assertDontSee('evil.example')
+            ->assertDontSee('javascript:alert(1)');
+    }
+
+    public function test_article_page_renders_content_text_ads_around_article_body(): void
+    {
+        SiteSetting::query()->updateOrCreate(
+            ['setting_key' => 'article_detail_text_ads'],
+            ['setting_value' => json_encode([
+                [
+                    'id' => 'top-text-ad',
+                    'name' => 'Top Text Ad',
+                    'placement' => 'content_top',
+                    'text' => 'Top <Deal>',
+                    'url' => '/promo?#intro',
+                    'text_color' => '#ff6600',
+                    'open_new_tab' => false,
+                    'tracking_enabled' => true,
+                    'tracking_param' => 'utm_source=geoflow',
+                    'enabled' => true,
+                    'sort_order' => 10,
+                ],
+                [
+                    'id' => 'bottom-text-ad',
+                    'name' => 'Bottom Text Ad',
+                    'placement' => 'content_bottom',
+                    'text' => 'Bottom CTA',
+                    'url' => 'https://example.com/bottom',
+                    'text_color' => '#2563eb',
+                    'open_new_tab' => true,
+                    'tracking_enabled' => false,
+                    'tracking_param' => '',
+                    'enabled' => true,
+                    'sort_order' => 20,
+                ],
+            ], JSON_UNESCAPED_UNICODE)]
+        );
+        SiteSettingsBag::forget();
+
+        $category = Category::query()->create([
+            'name' => '科技资讯',
+            'slug' => 'tech',
+        ]);
+        $author = Author::query()->create([
+            'name' => 'GEOFlow',
+        ]);
+        $article = Article::query()->create([
+            'title' => '正文广告渲染测试',
+            'slug' => 'article-text-ad-render-test',
+            'excerpt' => '',
+            'content' => '## 正文标题',
+            'category_id' => $category->id,
+            'author_id' => $author->id,
+            'status' => 'published',
+            'review_status' => 'approved',
+            'is_ai_generated' => 1,
+            'published_at' => now(),
+        ]);
+
+        $this->get(route('site.article', $article->slug))
+            ->assertOk()
+            ->assertSee('article-text-ads--content-top', false)
+            ->assertSee('article-text-ads--content-bottom', false)
+            ->assertSee('Top &lt;Deal&gt;', false)
+            ->assertDontSee('Top <Deal>', false)
+            ->assertSee('href="/promo?utm_source=geoflow#intro"', false)
+            ->assertDontSee('href="/promo?&utm_source=geoflow#intro"', false)
+            ->assertSee('href="https://example.com/bottom"', false)
+            ->assertSee('rel="noopener sponsored nofollow"', false)
+            ->assertSee('target="_blank"', false)
+            ->assertSee('--article-text-ad-color: #ff6600;', false);
+    }
+
+    public function test_article_page_renders_module_based_content_text_ads(): void
+    {
+        SiteSetting::query()->updateOrCreate(
+            ['setting_key' => 'article_detail_text_ads'],
+            ['setting_value' => json_encode([
+                [
+                    'id' => 'module-top',
+                    'name' => 'Top Module',
+                    'placement' => 'content_top',
+                    'enabled' => true,
+                    'sort_order' => 10,
+                    'links' => [
+                        [
+                            'id' => 'module-top-link-1',
+                            'text' => 'Top Module CTA',
+                            'url' => '/module-top',
+                            'text_color' => '#2563eb',
+                            'open_new_tab' => false,
+                            'tracking_enabled' => true,
+                            'tracking_param' => 'utm_campaign=module',
+                            'enabled' => true,
+                            'sort_order' => 10,
+                        ],
+                        [
+                            'id' => 'module-top-link-2',
+                            'text' => 'Disabled Module CTA',
+                            'url' => '/disabled',
+                            'enabled' => false,
+                            'sort_order' => 20,
+                        ],
+                    ],
+                ],
+            ], JSON_UNESCAPED_UNICODE)]
+        );
+        SiteSettingsBag::forget();
+
+        $category = Category::query()->create([
+            'name' => '科技资讯',
+            'slug' => 'module-tech',
+        ]);
+        $author = Author::query()->create([
+            'name' => 'GEOFlow',
+        ]);
+        $article = Article::query()->create([
+            'title' => '模块广告渲染测试',
+            'slug' => 'article-text-ad-module-render-test',
+            'excerpt' => '',
+            'content' => '## 正文标题',
+            'category_id' => $category->id,
+            'author_id' => $author->id,
+            'status' => 'published',
+            'review_status' => 'approved',
+            'is_ai_generated' => 1,
+            'published_at' => now(),
+        ]);
+
+        $this->get(route('site.article', $article->slug))
+            ->assertOk()
+            ->assertSee('article-text-ad-module', false)
+            ->assertSee('data-module-id="module-top"', false)
+            ->assertSee('Top Module CTA')
+            ->assertSee('href="/module-top?utm_campaign=module"', false)
+            ->assertDontSee('Disabled Module CTA');
     }
 
     public function test_homepage_uses_explicit_hot_and_featured_articles(): void
@@ -108,6 +469,27 @@ MD);
             ->assertSee('首页热门文章')
             ->assertSee('精选文章')
             ->assertSee('首页精选文章');
+    }
+
+    public function test_homepage_modules_partial_tolerates_missing_article_collection(): void
+    {
+        $html = view('site.partials.homepage-modules', [
+            'homepageModules' => [],
+            'homepageStyle' => [],
+            'showHomepageModules' => false,
+        ])->render();
+
+        $this->assertSame('', trim($html));
+    }
+
+    public function test_theme_sidebar_tolerates_missing_article_collection(): void
+    {
+        $html = view('theme.apihot-recommend-20260623.partials.sidebar', [
+            'siteTitle' => 'GEOFlow',
+            'showFeedPanel' => false,
+        ])->render();
+
+        $this->assertStringContainsString(__('site.home_empty_title'), $html);
     }
 
     public function test_frontend_category_navigation_hides_categories_without_published_articles(): void

@@ -5,11 +5,11 @@
         $schemaAtContext = chr(64).'context';
         $schemaAtType = chr(64).'type';
         $schemaItems = [];
-        foreach ((method_exists($articles, 'getCollection') ? $articles->getCollection() : collect($articles))->take(10) as $schemaArticle) {
+        foreach ((is_object($articles ?? null) && method_exists($articles, 'getCollection') ? $articles->getCollection() : collect($articles ?? []))->take(10) as $schemaArticle) {
             $schemaItems[] = [
                 $schemaAtType => 'ListItem',
                 'position' => count($schemaItems) + 1,
-                'url' => route('site.article', $schemaArticle->slug),
+                'url' => $siteUrls->article($schemaArticle),
                 'name' => $schemaArticle->title,
             ];
         }
@@ -25,14 +25,14 @@
             ],
         ];
     @endphp
-    <script type="application/ld+json">
-        {!! json_encode($collectionSchema, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT) !!}
-    </script>
+    <x-json-ld :data="$collectionSchema" />
 @endpush
 
 @section('content')
-    @php
-        $homeArticles = method_exists($articles, 'getCollection') ? $articles->getCollection() : collect($articles);
+        @include("site.partials.homepage-modules", ["homepageModules" => $homepageModules ?? [], "homepageStyle" => $homepageStyle ?? [], "showHomepageModules" => $showHomepageModules ?? false, "articles" => $articles ?? collect(), "featuredArticles" => $featuredArticles ?? collect(), "hotArticles" => $hotArticles ?? collect()])
+
+@php
+        $homeArticles = is_object($articles ?? null) && method_exists($articles, 'getCollection') ? $articles->getCollection() : collect($articles ?? []);
         $homepageHotArticles = collect($hotArticles ?? []);
         $isDefaultHome = $search === '' && !$category && !$categoryMissing;
         $leadArticle = $isDefaultHome ? ($featuredArticles->first() ?: $homeArticles->first()) : null;
@@ -61,19 +61,19 @@
                         <div class="ne-home-lead-main">
                             <div class="ne-page-kicker">{{ $siteSubtitle !== '' ? $siteSubtitle : $siteTitle }}</div>
                             <h1>
-                                <a href="{{ route('site.article', $leadArticle->slug) }}">{{ $leadArticle->title }}</a>
+                                <a href="{{ $siteUrls->article($leadArticle) }}">{{ $leadArticle->title }}</a>
                             </h1>
                             @if($leadSummary !== '')
                                 <p>{{ $leadSummary }}</p>
                             @elseif($siteDescription !== '')
                                 <p>{{ $siteDescription }}</p>
                             @endif
-                            <a href="{{ route('site.article', $leadArticle->slug) }}" class="ne-card-action">{{ __('site.home_read_more') }}</a>
+                            <a href="{{ $siteUrls->article($leadArticle) }}" class="ne-card-action">{{ __('site.home_read_more') }}</a>
                         </div>
                         <div class="ne-home-headlines">
                             <div class="ne-mini-title">{{ __('site.home_featured') }}</div>
                             @forelse($headlineArticles as $headlineArticle)
-                                <a href="{{ route('site.article', $headlineArticle->slug) }}">{{ $headlineArticle->title }}</a>
+                                <a href="{{ $siteUrls->article($headlineArticle) }}">{{ $headlineArticle->title }}</a>
                             @empty
                                 <span>{{ $siteDescription !== '' ? $siteDescription : __('site.home_hero_fallback') }}</span>
                             @endforelse
@@ -83,7 +83,7 @@
                 @if($homepageHotArticles->isNotEmpty())
                     <div class="ne-hot-carousel" data-hot-carousel>
                         @foreach($homepageHotArticles as $hotArticle)
-                            <a href="{{ route('site.article', $hotArticle->slug) }}" class="ne-breaking {{ $loop->first ? 'is-active' : '' }}" data-hot-slide>
+                            <a href="{{ $siteUrls->article($hotArticle) }}" class="ne-breaking {{ $loop->first ? 'is-active' : '' }}" data-hot-slide>
                                 <strong>{{ __('site.home_hot_badge') }}</strong>
                                 <span>{{ $hotArticle->title }}</span>
                             </a>

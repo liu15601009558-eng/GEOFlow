@@ -9,15 +9,89 @@
     $selectedDistributionChannelIds = collect(old('distribution_channel_ids', $taskForm['distribution_channel_ids'] ?? []))
         ->map(static fn ($id): string => (string) $id)
         ->all();
+    $distributionChannels = $formOptions['distributionChannels'] ?? [];
+    $visibleDistributionChannelLimit = 6;
+    $collapsedDistributionChannelCount = collect($distributionChannels)
+        ->values()
+        ->filter(static fn (array $channel, int $index): bool => $index >= $visibleDistributionChannelLimit && ! in_array((string) ($channel['id'] ?? ''), $selectedDistributionChannelIds, true))
+        ->count();
+    $selectedKnowledgeBaseIds = collect(old('knowledge_base_ids', $taskForm['knowledge_base_ids'] ?? array_filter([(string) ($taskForm['knowledge_base_id'] ?? '')])))
+        ->map(static fn ($id): string => (string) $id)
+        ->filter()
+        ->unique()
+        ->take(5)
+        ->values()
+        ->all();
+    $knowledgeBases = $formOptions['knowledgeBases'] ?? [];
+    $visibleKnowledgeBaseLimit = 6;
+    $collapsedKnowledgeBaseCount = collect($knowledgeBases)
+        ->values()
+        ->filter(static fn (array $kb, int $index): bool => $index >= $visibleKnowledgeBaseLimit && ! in_array((string) ($kb['id'] ?? ''), $selectedKnowledgeBaseIds, true))
+        ->count();
     $publishScope = (string) old('publish_scope', (string) ($taskForm['publish_scope'] ?? 'local_and_distribution'));
+    $distributionStrategy = (string) old('distribution_strategy', (string) ($taskForm['distribution_strategy'] ?? 'broadcast'));
     $distributionChannelsDisabled = $publishScope === 'local_only';
+    $selectedTitleLibraryId = (string) old('title_library_id', (string) ($taskForm['title_library_id'] ?? ''));
+    $selectedTitleLibrary = collect($formOptions['titleLibraries'] ?? [])->first(
+        static fn (array $library): bool => (string) ($library['id'] ?? '') === $selectedTitleLibraryId
+    );
+    $createdCount = max(0, (int) ($taskForm['created_count'] ?? 0));
+    $articleLimit = max(1, (int) old('article_limit', (int) ($taskForm['article_limit'] ?? 10)));
+    $plannedRemaining = max(0, $articleLimit - $createdCount);
+    $taskFormI18n = [
+        'checking' => $t('task_create.readiness.checking'),
+        'publishCadence' => $t('task_create.ai_quality.publish_cadence', ['minutes' => '__MINUTES__']),
+        'blockedTitle' => $t('task_create.readiness.dialog_blocked_title'),
+        'warningTitle' => $t('task_create.readiness.dialog_warning_title'),
+        'requestFailed' => $t('task_create.readiness.request_failed'),
+        'knowledgeBaseLimit' => $t('task_create.error.knowledge_base_limit'),
+        'distributionCount' => $t('task_create.label.distribution_channel_selected_count', ['count' => '__COUNT__']),
+        'knowledgeBaseCount' => $t('task_create.label.knowledge_base_selected_count', ['count' => '__COUNT__', 'max' => 5]),
+        'adjustLimit' => $t('task_create.readiness.actions.adjust_limit', ['count' => '__COUNT__']),
+        'savePaused' => $t('task_create.readiness.actions.save_paused'),
+        'saveExistingPaused' => $t('task_create.readiness.actions.save_existing_paused'),
+        'requestFailedIssue' => [
+            'code' => 'request_failed',
+            'severity' => 'warning',
+            'title' => $t('task_create.readiness.issue.request_failed.title'),
+            'message' => $t('task_create.readiness.issue.request_failed.message'),
+            'impact' => $t('task_create.readiness.issue.request_failed.impact'),
+            'suggestions' => [
+                $t('task_create.readiness.issue.request_failed.suggestion_1'),
+                $t('task_create.readiness.issue.request_failed.suggestion_2'),
+            ],
+        ],
+    ];
+    $initialTitleReadinessReport = session('title_readiness_report');
+    $qualityEnabled = (bool) old('ai_quality_enabled', (bool) ($taskForm['ai_quality_enabled'] ?? false));
+    $qualityPrompts = $formOptions['qualityPrompts'] ?? [];
+    $defaultQualityPromptId = (string) (collect($qualityPrompts)->firstWhere('system_managed', true)['id'] ?? ($qualityPrompts[0]['id'] ?? ''));
+    $qualityPromptId = (string) old('ai_quality_prompt_id', (string) ($taskForm['ai_quality_prompt_id'] ?? $defaultQualityPromptId));
+    $qualityPassScore = max(1, min(100, (int) old('ai_quality_pass_score', (int) ($taskForm['ai_quality_pass_score'] ?? 85))));
+    $qualityRetrievalMode = (string) old('ai_quality_retrieval_mode', (string) ($taskForm['ai_quality_retrieval_mode'] ?? ''));
+    $qualityAutoOptimizeEnabled = $qualityEnabled && (bool) old('ai_quality_auto_optimize_enabled', (bool) ($taskForm['ai_quality_auto_optimize_enabled'] ?? false));
+    $qualityOptimizationLevel = (string) old('ai_quality_optimization_level', (string) ($taskForm['ai_quality_optimization_level'] ?? 'excellent_80'));
+    $configurationCapabilities = $formOptions['configurationCapabilities'] ?? [];
+    $optimizationAvailable = (bool) ($configurationCapabilities['optimization_available'] ?? false);
+    $optimizationBlockedMessage = implode('；', array_column($configurationCapabilities['optimization_blockers'] ?? [], 'message'));
+    $optimizationStrategyOptions = [
+        'pass' => ['minimum' => 0, 'label' => $t('task_create.ai_quality.optimization_pass'), 'desc' => $t('task_create.ai_quality.optimization_pass_help')],
+        'excellent_80' => ['minimum' => 80, 'label' => $t('task_create.ai_quality.optimization_80'), 'desc' => $t('task_create.ai_quality.optimization_80_help')],
+        'excellent_90' => ['minimum' => 90, 'label' => $t('task_create.ai_quality.optimization_90'), 'desc' => $t('task_create.ai_quality.optimization_90_help')],
+    ];
 @endphp
 
 @section('content')
+    @if (!$isEdit)
+        <nav aria-label="任务类型" class="mb-5 flex gap-3 border-b border-gray-200 pb-4" data-task-type-chooser>
+            <a class="rounded-md bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700" href="{{ route('admin.tasks.create', ['content_type' => 'article']) }}">文章任务</a>
+            <a class="rounded-md px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50" href="{{ route('admin.tasks.create', ['content_type' => 'topic']) }}">专题任务</a>
+        </nav>
+    @endif
     <div class="px-4 sm:px-0">
         <div class="flex items-center justify-between mb-6">
             <div class="flex items-center space-x-4">
-                <a href="{{ route('admin.tasks.index') }}" class="text-gray-400 hover:text-gray-600">
+                <a href="{{ route('admin.tasks.index') }}" aria-label="{{ __('admin.common.back') }}" class="text-gray-400 hover:text-gray-600">
                     <i data-lucide="arrow-left" class="w-5 h-5"></i>
                 </a>
                 <div>
@@ -26,6 +100,35 @@
                 </div>
             </div>
         </div>
+
+        <section class="mb-6 rounded-lg border border-blue-100 bg-white p-5 shadow-sm">
+            <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                    <h2 class="text-lg font-semibold text-gray-900">{{ $t('task_create.engineering.title') }}</h2>
+                    <p class="mt-1 max-w-4xl text-sm leading-6 text-gray-600">{{ $t('task_create.engineering.desc') }}</p>
+                </div>
+                <span class="inline-flex w-fit items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                    <i data-lucide="workflow" class="mr-1.5 h-3.5 w-3.5"></i>
+                    {{ $t('task_create.engineering.badge') }}
+                </span>
+            </div>
+            <div class="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+                @foreach ([
+                    ['icon' => 'map', 'title' => $t('task_create.engineering.prompt_title'), 'desc' => $t('task_create.engineering.prompt_desc')],
+                    ['icon' => 'database', 'title' => $t('task_create.engineering.evidence_title'), 'desc' => $t('task_create.engineering.evidence_desc')],
+                    ['icon' => 'shield-check', 'title' => $t('task_create.engineering.gate_title'), 'desc' => $t('task_create.engineering.gate_desc')],
+                    ['icon' => 'radio-tower', 'title' => $t('task_create.engineering.distribution_title'), 'desc' => $t('task_create.engineering.distribution_desc')],
+                ] as $item)
+                    <article class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                        <div class="flex h-10 w-10 items-center justify-center rounded-md bg-white text-blue-600 ring-1 ring-blue-100">
+                            <i data-lucide="{{ $item['icon'] }}" class="h-5 w-5"></i>
+                        </div>
+                        <h3 class="mt-4 text-sm font-semibold text-gray-900">{{ $item['title'] }}</h3>
+                        <p class="mt-1 text-xs leading-5 text-gray-500">{{ $item['desc'] }}</p>
+                    </article>
+                @endforeach
+            </div>
+        </section>
 
         <div data-task-form-shell class="w-full">
             @if (! $hasCategories)
@@ -40,10 +143,21 @@
                     </div>
                 </div>
             @else
-            <form method="POST" action="{{ $isEdit ? route('admin.tasks.update', ['taskId' => $taskId]) : route('admin.tasks.store') }}" class="grid grid-cols-1 gap-6 xl:grid-cols-12">
+            <form
+                method="POST"
+                action="{{ $isEdit ? route('admin.tasks.update', ['taskId' => $taskId]) : route('admin.tasks.store') }}"
+                class="grid grid-cols-1 gap-6 xl:grid-cols-12"
+                data-task-form
+                data-title-readiness-url="{{ route('admin.tasks.title-readiness') }}"
+                data-task-id="{{ $taskId ?? '' }}"
+                data-created-count="{{ $createdCount }}"
+            >
                 @csrf
+                <input type="hidden" name="content_type" value="article">
                 @if ($isEdit)
                     @method('PUT')
+                    <input type="hidden" name="task_revision" value="{{ (string) ($taskForm['task_revision'] ?? '') }}">
+                    <input type="hidden" name="config_version" value="{{ max(1, (int) ($taskForm['ai_quality_config_version'] ?? 1), (int) ($taskForm['ai_quality_policy_version'] ?? 1)) }}">
                 @endif
 
                 <div class="bg-white shadow rounded-lg xl:col-span-12">
@@ -64,11 +178,25 @@
                                 <select name="title_library_id" id="title_library_id" required class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
                                     <option value="">{{ $t('task_create.option.select_title_library') }}</option>
                                     @foreach ($formOptions['titleLibraries'] as $library)
-                                        <option value="{{ $library['id'] }}" @selected((string) old('title_library_id', (string) ($taskForm['title_library_id'] ?? '')) === (string) $library['id'])>
-                                            {{ $t('task_create.option.library_count', ['name' => $library['name'], 'count' => $library['count']]) }}
+                                        <option
+                                            value="{{ $library['id'] }}"
+                                            data-title-name="{{ $library['name'] }}"
+                                            data-title-total="{{ $library['count'] }}"
+                                            data-title-used="{{ $library['used'] }}"
+                                            data-title-available="{{ $library['available'] }}"
+                                            data-title-manage-url="{{ $library['manage_url'] }}"
+                                            @selected($selectedTitleLibraryId === (string) $library['id'])
+                                        >
+                                            {{ $t('task_create.option.library_readiness_count', ['name' => $library['name'], 'available' => $library['available'], 'total' => $library['count']]) }}
                                         </option>
                                     @endforeach
                                 </select>
+                                <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs leading-5 text-gray-500" data-task-title-stats aria-live="polite">
+                                    <span>{{ $t('task_create.readiness.stats.total') }} <strong class="font-semibold text-gray-700 tabular-nums" data-task-title-stat="total">{{ (int) ($selectedTitleLibrary['count'] ?? 0) }}</strong></span>
+                                    <span>{{ $t('task_create.readiness.stats.used') }} <strong class="font-semibold text-gray-700 tabular-nums" data-task-title-stat="used">{{ (int) ($selectedTitleLibrary['used'] ?? 0) }}</strong></span>
+                                    <span>{{ $t('task_create.readiness.stats.available') }} <strong class="font-semibold text-gray-700 tabular-nums" data-task-title-stat="available">{{ (int) ($selectedTitleLibrary['available'] ?? 0) }}</strong></span>
+                                    <span>{{ $t('task_create.readiness.stats.remaining') }} <strong class="font-semibold text-gray-700 tabular-nums" data-task-title-stat="remaining">{{ $plannedRemaining }}</strong></span>
+                                </div>
                             </div>
                             <div>
                                 <label for="status" class="block text-sm font-medium text-gray-700">{{ $t('task_create.field.task_status') }}</label>
@@ -99,10 +227,15 @@
                             </div>
                             <div>
                                 <label for="ai_model_id" class="block text-sm font-medium text-gray-700">{{ $t('task_create.field.ai_model') }} *</label>
+                                @if (collect($formOptions['aiModels'])->contains(fn (array $model): bool => in_array('ai_model_id', (array) ($model['current_inaccessible_for'] ?? []), true)))
+                                    <input type="hidden" name="ai_model_id" value="{{ old('ai_model_id', (string) ($taskForm['ai_model_id'] ?? '')) }}">
+                                @endif
                                 <select name="ai_model_id" id="ai_model_id" required class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
                                     <option value="">{{ $t('task_create.option.select_ai_model') }}</option>
                                     @foreach ($formOptions['aiModels'] as $model)
-                                        <option value="{{ $model['id'] }}" @selected((string) old('ai_model_id', (string) ($taskForm['ai_model_id'] ?? '')) === (string) $model['id'])>{{ $model['name'] }}</option>
+                                        <option value="{{ $model['id'] }}"
+                                                @selected((string) old('ai_model_id', (string) ($taskForm['ai_model_id'] ?? '')) === (string) $model['id'])
+                                                @disabled($model['disabled'] ?? false)>{{ $model['name'] }}</option>
                                     @endforeach
                                 </select>
                             </div>
@@ -114,14 +247,59 @@
                                 </select>
                                 <p class="mt-1 text-sm text-gray-500">{!! $t('task_create.help.model_selection_mode') !!}</p>
                             </div>
-                            <div>
-                                <label for="knowledge_base_id" class="block text-sm font-medium text-gray-700">{{ $t('task_create.field.knowledge_base') }}</label>
-                                <select name="knowledge_base_id" id="knowledge_base_id" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
-                                    <option value="">{{ $t('task_create.option.no_knowledge_base') }}</option>
-                                    @foreach ($formOptions['knowledgeBases'] as $kb)
-                                        <option value="{{ $kb['id'] }}" @selected((string) old('knowledge_base_id', (string) ($taskForm['knowledge_base_id'] ?? '')) === (string) $kb['id'])>{{ $kb['name'] }}</option>
-                                    @endforeach
-                                </select>
+                            <div class="lg:col-span-3">
+                                <div class="flex flex-wrap items-center justify-between gap-2">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700">{{ $t('task_create.field.knowledge_bases') }}</label>
+                                        <p class="mt-1 text-sm text-gray-500">{!! $t('task_create.help.knowledge_bases') !!}</p>
+                                    </div>
+                                    <span data-knowledge-base-count class="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                                        {{ $t('task_create.label.knowledge_base_selected_count', ['count' => count($selectedKnowledgeBaseIds), 'max' => 5]) }}
+                                    </span>
+                                </div>
+                                @if (empty($knowledgeBases))
+                                    <div class="mt-3 rounded-md bg-gray-50 px-4 py-3 text-sm text-gray-600">
+                                        {{ $t('task_create.option.no_knowledge_base') }}
+                                    </div>
+                                @else
+                                    <div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                                        @foreach ($knowledgeBases as $knowledgeBaseIndex => $kb)
+                                            @php
+                                                $knowledgeBaseId = (string) $kb['id'];
+                                                $knowledgeBaseInitiallyHidden = $knowledgeBaseIndex >= $visibleKnowledgeBaseLimit
+                                                    && ! in_array($knowledgeBaseId, $selectedKnowledgeBaseIds, true);
+                                            @endphp
+                                            <label data-knowledge-base-card @if($knowledgeBaseInitiallyHidden) data-knowledge-base-collapsed="true" @endif
+                                                   @class([
+                                                       'flex cursor-pointer items-start gap-3 rounded-md border border-gray-200 px-4 py-3 text-sm transition hover:border-blue-300 hover:bg-blue-50',
+                                                       'hidden' => $knowledgeBaseInitiallyHidden,
+                                                   ])>
+                                                <input type="checkbox" name="knowledge_base_ids[]" value="{{ $knowledgeBaseId }}" @checked(in_array($knowledgeBaseId, $selectedKnowledgeBaseIds, true)) data-knowledge-base-input
+                                                       class="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                                                <span class="min-w-0">
+                                                    <span class="block font-medium text-gray-900">{{ $kb['name'] }}</span>
+                                                    <span class="block text-xs text-gray-500">{{ $t('task_create.help.knowledge_base_card') }}</span>
+                                                </span>
+                                            </label>
+                                        @endforeach
+                                    </div>
+                                    @if ($collapsedKnowledgeBaseCount > 0)
+                                        <div class="mt-3">
+                                            <button type="button" data-knowledge-base-toggle
+                                                    data-expand-label="{{ $t('task_create.button.knowledge_base_expand_more', ['count' => '__COUNT__']) }}"
+                                                    data-collapse-label="{{ $t('task_create.button.knowledge_base_collapse') }}"
+                                                    class="inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50">
+                                                {{ $t('task_create.button.knowledge_base_expand_more', ['count' => $collapsedKnowledgeBaseCount]) }}
+                                            </button>
+                                        </div>
+                                    @endif
+                                @endif
+                                @error('knowledge_base_ids')
+                                    <p class="mt-2 text-sm text-red-600">{{ $message }}</p>
+                                @enderror
+                                @error('knowledge_base_ids.*')
+                                    <p class="mt-2 text-sm text-red-600">{{ $message }}</p>
+                                @enderror
                             </div>
                             <div>
                                 <label for="author_id" class="block text-sm font-medium text-gray-700">{{ $t('task_create.field.author') }}</label>
@@ -142,7 +320,9 @@
                         <p class="mt-1 text-sm text-gray-600">{{ $t('task_create.section.image_desc') }}</p>
                     </div>
                     <div class="px-6 py-4">
-                        @php($imageCountValue = (string) old('image_count', (string) ($taskForm['image_count'] ?? '1')))
+                        @php
+                            $imageCountValue = (string) old('image_count', (string) ($taskForm['image_count'] ?? '1'));
+                        @endphp
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
                                 <label for="image_library_id" class="block text-sm font-medium text-gray-700">{{ $t('task_create.field.image_library') }}</label>
@@ -196,6 +376,180 @@
                     </div>
                 </div>
 
+                <section class="bg-white shadow rounded-lg xl:col-span-12" data-ai-quality-card>
+                    <div class="flex flex-col gap-4 border-b border-gray-200 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
+                        <div class="flex items-start gap-3">
+                            <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-blue-50 text-blue-600">
+                                <i data-lucide="shield-check" class="h-5 w-5"></i>
+                            </div>
+                            <div>
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <h3 class="text-lg font-medium text-gray-900">{{ $t('task_create.ai_quality.title') }}</h3>
+                                    <span class="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-600" data-ai-quality-state
+                                          data-enabled-label="{{ $t('task_create.ai_quality.enabled') }}"
+                                          data-disabled-label="{{ $t('task_create.ai_quality.disabled') }}">
+                                        {{ $qualityEnabled ? $t('task_create.ai_quality.enabled') : $t('task_create.ai_quality.disabled') }}
+                                    </span>
+                                </div>
+                                <p class="mt-1 text-sm leading-6 text-gray-600">{{ $t('task_create.ai_quality.description') }}</p>
+                            </div>
+                        </div>
+                        <label class="relative inline-flex cursor-pointer items-center gap-3">
+                            <span class="text-sm font-medium text-gray-700">{{ $t('task_create.ai_quality.switch_label') }}</span>
+                            <input type="checkbox" name="ai_quality_enabled" id="ai_quality_enabled" value="1" @checked($qualityEnabled)
+                                   class="peer sr-only" data-ai-quality-toggle>
+                            <span class="relative h-6 w-11 rounded-full bg-gray-300 transition peer-checked:bg-blue-600 peer-focus-visible:ring-2 peer-focus-visible:ring-blue-500 peer-focus-visible:ring-offset-2 after:absolute after:left-0.5 after:top-0.5 after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow after:transition-transform peer-checked:after:translate-x-5"></span>
+                        </label>
+                    </div>
+
+                    <div @class(['px-6 py-5 space-y-5', 'hidden' => ! $qualityEnabled]) data-ai-quality-settings>
+                        @if (empty($qualityPrompts))
+                            <div class="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+                                {{ $t('task_create.ai_quality.no_prompt') }}
+                                <a href="{{ route('admin.ai-prompts.index') }}" class="font-semibold underline">{{ $t('task_create.ai_quality.configure_prompt') }}</a>
+                            </div>
+                        @endif
+
+                        <div class="grid grid-cols-1 gap-5 lg:grid-cols-2">
+                            <div>
+                                <label for="ai_quality_prompt_id" class="block text-sm font-medium text-gray-700">{{ $t('task_create.ai_quality.prompt_label') }}</label>
+                                <select name="ai_quality_prompt_id" id="ai_quality_prompt_id" data-ai-quality-required
+                                        class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                    <option value="">{{ $t('task_create.ai_quality.prompt_placeholder') }}</option>
+                                    @foreach ($qualityPrompts as $qualityPrompt)
+                                        <option value="{{ $qualityPrompt['id'] }}" @selected($qualityPromptId === (string) $qualityPrompt['id'])>
+                                            {{ $qualityPrompt['name'] }}{{ $qualityPrompt['version'] !== '' ? ' · v'.$qualityPrompt['version'] : '' }}
+                                        </option>
+                                    @endforeach
+                                </select>
+                                <p class="mt-1 text-sm text-gray-500">{{ $t('task_create.ai_quality.prompt_help') }}</p>
+                                @error('ai_quality_prompt_id')<p class="mt-2 text-sm text-red-600">{{ $message }}</p>@enderror
+                            </div>
+                            <div>
+                                <label for="ai_quality_model_id" class="block text-sm font-medium text-gray-700">{{ $t('task_create.ai_quality.model_label') }}</label>
+                                @if (collect($formOptions['aiModels'])->contains(fn (array $model): bool => in_array('ai_quality_model_id', (array) ($model['current_inaccessible_for'] ?? []), true)))
+                                    <input type="hidden" name="ai_quality_model_id" value="{{ old('ai_quality_model_id', (string) ($taskForm['ai_quality_model_id'] ?? '')) }}">
+                                @endif
+                                <select name="ai_quality_model_id" id="ai_quality_model_id"
+                                        class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                    <option value="">{{ $t('task_create.ai_quality.follow_content_model') }}</option>
+                                    @foreach ($formOptions['aiModels'] as $model)
+                                        <option value="{{ $model['id'] }}"
+                                                @selected((string) old('ai_quality_model_id', (string) ($taskForm['ai_quality_model_id'] ?? '')) === (string) $model['id'])
+                                                @disabled($model['disabled'] ?? false)>{{ $model['name'] }}</option>
+                                    @endforeach
+                                </select>
+                                <p class="mt-1 text-sm text-gray-500">{{ $t('task_create.ai_quality.model_help') }}</p>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 gap-5 lg:grid-cols-2">
+                            <div>
+                                <label for="ai_quality_pass_score" class="block text-sm font-medium text-gray-700">{{ $t('task_create.ai_quality.pass_score') }}</label>
+                                <input type="number" min="1" max="100" name="ai_quality_pass_score" id="ai_quality_pass_score"
+                                       value="{{ old('ai_quality_pass_score', (string) ($taskForm['ai_quality_pass_score'] ?? 85)) }}"
+                                       class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                <p class="mt-1 text-sm text-gray-500">{{ $t('task_create.ai_quality.pass_score_help') }}</p>
+                            </div>
+                            <div>
+                                <label for="ai_quality_manual_override_min_score" class="block text-sm font-medium text-gray-700">{{ $t('task_create.ai_quality.manual_score') }}</label>
+                                <input type="number" min="0" max="99" name="ai_quality_manual_override_min_score" id="ai_quality_manual_override_min_score"
+                                       value="{{ old('ai_quality_manual_override_min_score', (string) ($taskForm['ai_quality_manual_override_min_score'] ?? 70)) }}"
+                                       class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                <p class="mt-1 text-sm text-gray-500">{{ $t('task_create.ai_quality.manual_score_help') }}</p>
+                            </div>
+                        </div>
+
+                        <x-admin.ai-quality-retrieval-selector
+                            id="task-ai-quality-retrieval-mode"
+                            name="ai_quality_retrieval_mode"
+                            :value="$qualityRetrievalMode"
+                            :selected-knowledge-base-ids="$selectedKnowledgeBaseIds"
+                            :readiness-by-knowledge-base="$formOptions['aiQualityRetrievalReadinessByKnowledgeBase'] ?? []"
+                            knowledge-input-selector="[data-knowledge-base-input]"
+                            :persisted="$isEdit || old('ai_quality_retrieval_mode') !== null"
+                        />
+
+                        <label class="flex gap-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-4">
+                            <input type="checkbox" name="ai_quality_timeout_sampling_enabled" id="ai_quality_timeout_sampling_enabled" value="1"
+                                   @checked((bool) old('ai_quality_timeout_sampling_enabled', (bool) ($taskForm['ai_quality_timeout_sampling_enabled'] ?? false)))
+                                   class="mt-1 h-4 w-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                                   data-ai-quality-timeout-sampling>
+                            <span>
+                                <span class="block text-sm font-medium text-amber-950">{{ $t('task_create.ai_quality.timeout_sampling_label') }}</span>
+                                <span class="mt-1 block text-sm leading-6 text-amber-800">{{ $t('task_create.ai_quality.timeout_sampling_help') }}</span>
+                                <span class="mt-2 block text-sm font-medium text-amber-900" data-ai-quality-sampling-note>{{ $t('task_create.ai_quality.sampling_incompatible') }}</span>
+                            </span>
+                        </label>
+
+                        <fieldset class="rounded-lg border border-gray-200 bg-gray-50 px-4 py-4" data-ai-quality-optimization data-available="{{ $optimizationAvailable ? 'true' : 'false' }}" data-blocked-message="{{ $optimizationBlockedMessage }}">
+                            <legend class="sr-only">{{ $t('task_create.ai_quality.optimization_title') }}</legend>
+                            <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                <div class="max-w-3xl">
+                                    <p class="text-sm font-semibold text-gray-900">{{ $t('task_create.ai_quality.optimization_title') }}</p>
+                                    <p class="mt-1 text-sm leading-6 text-gray-600">{{ $t('task_create.ai_quality.optimization_help') }}</p>
+                                </div>
+                                <label class="relative inline-flex shrink-0 cursor-pointer items-center gap-3">
+                                    <span class="text-sm font-medium text-gray-700">{{ $t('task_create.ai_quality.optimization_switch') }}</span>
+                                    <input type="checkbox" name="ai_quality_auto_optimize_enabled" id="ai_quality_auto_optimize_enabled" value="1"
+                                           @checked($qualityAutoOptimizeEnabled) class="peer sr-only" data-ai-quality-optimization-toggle>
+                                    <span class="relative h-6 w-11 rounded-full bg-gray-300 transition peer-checked:bg-blue-600 peer-focus-visible:ring-2 peer-focus-visible:ring-blue-500 peer-focus-visible:ring-offset-2 after:absolute after:left-0.5 after:top-0.5 after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow after:transition-transform peer-checked:after:translate-x-5"></span>
+                                </label>
+                            </div>
+
+                            @if (! $optimizationAvailable)
+                                <p class="mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">{{ $optimizationBlockedMessage }} {{ $t('task_create.ai_quality.optimization_unavailable_help') }}</p>
+                            @endif
+                            @error('ai_quality_auto_optimize_enabled')<p class="mt-2 text-sm text-red-600">{{ $message }}</p>@enderror
+                            <div class="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-3" data-ai-quality-optimization-options>
+                                @foreach ($optimizationStrategyOptions as $strategyValue => $strategy)
+                                    @php
+                                        $strategyRounds = app(\App\Services\GeoFlow\ArticleAiOptimizationPolicy::class)->resolve($strategyValue, $qualityPassScore)['max_rounds'];
+                                        $actualTarget = max($qualityPassScore, (int) $strategy['minimum']);
+                                    @endphp
+                                    <label class="flex cursor-pointer gap-3 rounded-lg border border-gray-200 bg-white px-4 py-3 has-[:checked]:border-blue-500 has-[:checked]:bg-blue-50">
+                                        <input type="radio" name="ai_quality_optimization_level" value="{{ $strategyValue }}"
+                                               @checked($qualityOptimizationLevel === $strategyValue)
+                                               class="mt-1 h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500"
+                                               data-ai-quality-optimization-level data-minimum-target="{{ $strategy['minimum'] }}">
+                                        <span class="min-w-0">
+                                            <span class="block text-sm font-semibold text-gray-900">{{ $strategy['label'] }}</span>
+                                            <span class="mt-1 block text-xs leading-5 text-gray-600">{{ $strategy['desc'] }}</span>
+                                            <span class="mt-2 block text-xs font-medium text-blue-700"
+                                                  data-ai-quality-optimization-target
+                                                  data-target-template="{{ $t('task_create.ai_quality.optimization_actual_target', ['score' => '__SCORE__']) }}">{{ $t('task_create.ai_quality.optimization_actual_target', ['score' => $actualTarget]) }}</span>
+                                            <span class="mt-1 block text-xs text-gray-500">{{ $t('task_create.ai_quality.optimization_rounds', ['rounds' => $strategyRounds, 'steps' => $strategyRounds * 2]) }}</span>
+                                        </span>
+                                    </label>
+                                @endforeach
+                            </div>
+                            <p class="mt-3 text-xs leading-5 text-gray-500">{{ $t('task_create.ai_quality.optimization_sampling_note') }}</p>
+                        </fieldset>
+
+                    </div>
+                        <div class="mx-6 mb-5 mt-5 rounded-md border border-blue-100 bg-blue-50 px-4 py-4">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-blue-700">{{ $t('task_create.ai_quality.workflow_title') }}</p>
+                            <div class="mt-3 flex flex-wrap items-center gap-2 text-sm text-gray-700" data-ai-quality-workflow
+                                 data-manual-label="{{ $t('task_create.ai_quality.workflow_manual') }}"
+                                 data-auto-label="{{ $t('task_create.ai_quality.workflow_auto') }}">
+                                <span class="rounded-md bg-white px-3 py-2 shadow-sm">{{ $t('task_create.ai_quality.workflow_generate') }}</span>
+                                <i data-lucide="arrow-right" class="h-4 w-4 text-gray-400"></i>
+                                <span class="rounded-md bg-white px-3 py-2 shadow-sm">{{ $t('task_create.ai_quality.workflow_base_risk') }}</span>
+                                <i data-lucide="arrow-right" class="h-4 w-4 text-gray-400"></i>
+                                <span @class(['rounded-md bg-white px-3 py-2 font-medium text-blue-700 shadow-sm', 'hidden' => ! $qualityEnabled]) data-ai-quality-workflow-inspect>{{ $t('task_create.ai_quality.workflow_inspect') }}</span>
+                                <i data-lucide="arrow-right" @class(['h-4 w-4 text-gray-400', 'hidden' => ! $qualityEnabled]) data-ai-quality-workflow-inspect></i>
+                                <span @class(['rounded-md bg-white px-3 py-2 font-medium text-blue-700 shadow-sm', 'hidden' => ! $qualityAutoOptimizeEnabled || ! $optimizationAvailable]) data-ai-quality-workflow-optimization>{{ $t('task_create.ai_quality.workflow_optimize') }}</span>
+                                <i @class(['h-4 w-4 text-gray-400', 'hidden' => ! $qualityAutoOptimizeEnabled || ! $optimizationAvailable]) data-ai-quality-workflow-optimization data-lucide="arrow-right"></i>
+                                <span class="rounded-md bg-white px-3 py-2 shadow-sm" data-ai-quality-workflow-tail>{{ (bool) old('need_review', (bool) ($taskForm['need_review'] ?? false)) ? $t('task_create.ai_quality.workflow_manual') : $t('task_create.ai_quality.workflow_auto') }}</span>
+                            </div>
+                            <p class="mt-3 text-sm font-medium text-blue-900" data-task-publish-cadence>{{ $t('task_create.ai_quality.publish_cadence', ['minutes' => old('publish_interval', (int) ($taskForm['publish_interval'] ?? 60))]) }}</p>
+                            <p class="mt-3 text-xs leading-5 text-blue-800">{{ $t('task_create.ai_quality.workflow_help') }}</p>
+                            @if($isEdit)
+                                <p class="mt-2 text-xs leading-5 text-blue-800" data-workflow-impact>{{ __('article_workflow.configuration_impact', ['total' => (int) ($taskForm['affected_unpublished_count'] ?? 0), 'held' => (int) ($taskForm['held_unpublished_count'] ?? 0)]) }}</p>
+                            @endif
+                        </div>
+                </section>
+
                 <div class="bg-white shadow rounded-lg xl:col-span-12">
                     <div class="px-6 py-4 border-b border-gray-200">
                         <h3 class="text-lg font-medium text-gray-900">{{ $t('task_create.section.distribution_title') }}</h3>
@@ -230,19 +584,88 @@
                             </div>
                         </fieldset>
 
-                        @if (empty($formOptions['distributionChannels']))
+                        @if (empty($distributionChannels))
                             <div class="rounded-md bg-gray-50 px-4 py-3 text-sm text-gray-600">
                                 {{ $t('task_create.distribution.empty') }}
-                                <a href="{{ route('admin.distribution.create') }}" class="font-medium text-blue-600 hover:text-blue-700">{{ $t('task_create.distribution.create_link') }}</a>
+                                @if ($canManageProtectedWorkflows ?? false)
+                                    <a href="{{ route('admin.distribution.create') }}" class="font-medium text-blue-600 hover:text-blue-700">{{ $t('task_create.distribution.create_link') }}</a>
+                                @endif
                             </div>
                         @else
+                            <fieldset class="mb-5">
+                                <legend class="text-sm font-medium text-gray-900">{{ $t('task_create.distribution.strategy_title') }}</legend>
+                                <p class="mt-1 text-sm text-gray-500">{{ $t('task_create.distribution.strategy_help') }}</p>
+                                <div class="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
+                                    <label data-distribution-strategy-card @class([
+                                        'flex gap-3 rounded-md border border-gray-200 px-4 py-3 text-sm transition',
+                                        'cursor-pointer hover:border-blue-300 hover:bg-blue-50' => ! $distributionChannelsDisabled,
+                                        'cursor-not-allowed bg-gray-50 opacity-50' => $distributionChannelsDisabled,
+                                    ])>
+                                        <input type="radio" name="distribution_strategy" value="broadcast" @checked($distributionStrategy === 'broadcast') @disabled($distributionChannelsDisabled) data-distribution-strategy-input class="mt-1 h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50">
+                                        <span>
+                                            <span class="block font-medium text-gray-900">{{ $t('task_create.distribution.strategy_broadcast') }}</span>
+                                            <span class="block text-gray-500">{{ $t('task_create.distribution.strategy_broadcast_desc') }}</span>
+                                        </span>
+                                    </label>
+                                    <label data-distribution-strategy-card @class([
+                                        'flex gap-3 rounded-md border border-gray-200 px-4 py-3 text-sm transition',
+                                        'cursor-pointer hover:border-blue-300 hover:bg-blue-50' => ! $distributionChannelsDisabled,
+                                        'cursor-not-allowed bg-gray-50 opacity-50' => $distributionChannelsDisabled,
+                                    ])>
+                                        <input type="radio" name="distribution_strategy" value="round_robin" @checked($distributionStrategy === 'round_robin') @disabled($distributionChannelsDisabled) data-distribution-strategy-input class="mt-1 h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50">
+                                        <span>
+                                            <span class="block font-medium text-gray-900">{{ $t('task_create.distribution.strategy_round_robin') }}</span>
+                                            <span class="block text-gray-500">{{ $t('task_create.distribution.strategy_round_robin_desc') }}</span>
+                                        </span>
+                                    </label>
+                                    <label data-distribution-strategy-card @class([
+                                        'flex gap-3 rounded-md border border-gray-200 px-4 py-3 text-sm transition',
+                                        'cursor-pointer hover:border-blue-300 hover:bg-blue-50' => ! $distributionChannelsDisabled,
+                                        'cursor-not-allowed bg-gray-50 opacity-50' => $distributionChannelsDisabled,
+                                    ])>
+                                        <input type="radio" name="distribution_strategy" value="random_balanced" @checked($distributionStrategy === 'random_balanced') @disabled($distributionChannelsDisabled) data-distribution-strategy-input class="mt-1 h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50">
+                                        <span>
+                                            <span class="block font-medium text-gray-900">{{ $t('task_create.distribution.strategy_random_balanced') }}</span>
+                                            <span class="block text-gray-500">{{ $t('task_create.distribution.strategy_random_balanced_desc') }}</span>
+                                        </span>
+                                    </label>
+                                </div>
+                                @error('distribution_strategy')
+                                    <p class="mt-2 text-sm text-red-600">{{ $message }}</p>
+                                @enderror
+                            </fieldset>
+
+                            <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+                                <div>
+                                    <h4 class="text-sm font-medium text-gray-900">{{ $t('task_create.distribution.channels_title') }}</h4>
+                                    <p class="mt-1 text-sm text-gray-500">{{ $t('task_create.distribution.channels_help') }}</p>
+                                </div>
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <span data-distribution-channel-count class="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700">
+                                        {{ $t('task_create.label.distribution_channel_selected_count', ['count' => count($selectedDistributionChannelIds)]) }}
+                                    </span>
+                                    <button type="button" data-distribution-channel-select-all @disabled($distributionChannelsDisabled)
+                                            class="inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50">
+                                        {{ $t('task_create.button.distribution_channel_select_all') }}
+                                    </button>
+                                    <button type="button" data-distribution-channel-clear @disabled($distributionChannelsDisabled)
+                                            class="inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50">
+                                        {{ $t('task_create.button.distribution_channel_clear') }}
+                                    </button>
+                                </div>
+                            </div>
                             <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                                @foreach ($formOptions['distributionChannels'] as $channel)
-                                    @php($channelId = (string) $channel['id'])
-                                    <label data-distribution-channel-card @class([
+                                @foreach ($distributionChannels as $index => $channel)
+                                    @php
+                                        $channelId = (string) $channel['id'];
+                                        $channelInitiallyHidden = $index >= $visibleDistributionChannelLimit
+                                            && ! in_array($channelId, $selectedDistributionChannelIds, true);
+                                    @endphp
+                                    <label data-distribution-channel-card @if($index >= $visibleDistributionChannelLimit) data-distribution-channel-collapsed="true" @endif @class([
                                         'flex items-start gap-3 rounded-md border border-gray-200 px-4 py-3 text-sm transition',
                                         'cursor-pointer hover:border-blue-300 hover:bg-blue-50' => ! $distributionChannelsDisabled,
                                         'cursor-not-allowed bg-gray-50 opacity-50' => $distributionChannelsDisabled,
+                                        'hidden' => $channelInitiallyHidden,
                                     ])>
                                         <input type="checkbox" name="distribution_channel_ids[]" value="{{ $channelId }}" @checked(! $distributionChannelsDisabled && in_array($channelId, $selectedDistributionChannelIds, true)) @disabled($distributionChannelsDisabled) data-distribution-channel-input
                                                class="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50">
@@ -253,6 +676,16 @@
                                     </label>
                                 @endforeach
                             </div>
+                            @if ($collapsedDistributionChannelCount > 0)
+                                <div class="mt-3">
+                                    <button type="button" data-distribution-channel-toggle
+                                            data-expand-label="{{ $t('task_create.button.distribution_channel_expand_more', ['count' => '__COUNT__']) }}"
+                                            data-collapse-label="{{ $t('task_create.button.distribution_channel_collapse') }}"
+                                            class="inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50">
+                                        {{ $t('task_create.button.distribution_channel_expand_more', ['count' => $collapsedDistributionChannelCount]) }}
+                                    </button>
+                                </div>
+                            @endif
                             <p class="mt-3 text-sm text-gray-500">{{ $t('task_create.distribution.help') }}</p>
                         @endif
                     </div>
@@ -290,7 +723,9 @@
                         <h3 class="text-lg font-medium text-gray-900">{{ $t('task_create.section.category_title') }}</h3>
                         <p class="mt-1 text-sm text-gray-600">{{ $t('task_create.section.category_desc') }}</p>
                     </div>
-                    @php($categoryMode = (string) old('category_mode', (string) ($taskForm['category_mode'] ?? 'smart')))
+                    @php
+                        $categoryMode = (string) old('category_mode', (string) ($taskForm['category_mode'] ?? 'smart'));
+                    @endphp
                     <div class="px-6 py-4 space-y-4">
                         <div>
                             <label class="text-base font-medium text-gray-900">{{ $t('task_create.field.category_mode') }}</label>
@@ -362,7 +797,7 @@
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
                                 <label for="article_limit" class="block text-sm font-medium text-gray-700">{{ $t('task_create.field.article_limit') }}</label>
-                                <input type="number" name="article_limit" id="article_limit" min="1" value="{{ old('article_limit', (string) ($taskForm['article_limit'] ?? 10)) }}"
+                                <input type="number" name="article_limit" id="article_limit" min="1" max="99999" required value="{{ old('article_limit', (string) ($taskForm['article_limit'] ?? 10)) }}"
                                        class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
                                 <p class="mt-1 text-sm text-gray-500">{{ $t('task_create.help.article_limit') }}</p>
                             </div>
@@ -388,159 +823,80 @@
                     <a href="{{ route('admin.tasks.index') }}" class="px-6 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
                         {{ __('admin.button.cancel') }}
                     </a>
-                    <button type="submit" class="px-6 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700">
-                        {{ $isEdit ? __('admin.task_edit.button.save_changes') : __('admin.button.create_task') }}
+                    <button type="submit" class="inline-flex min-h-10 items-center justify-center rounded-md border border-transparent bg-blue-600 px-6 py-2 text-sm font-medium text-white shadow-sm transition-[background-color,transform] duration-150 [@media(hover:hover)]:hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 active:scale-[.96] disabled:cursor-wait disabled:bg-blue-400" data-task-form-submit disabled aria-disabled="true">
+                        <span data-task-form-submit-label>{{ $isEdit ? __('admin.task_edit.button.save_changes') : __('admin.button.create_task') }}</span>
                     </button>
                 </div>
             </form>
             @endif
         </div>
     </div>
-@endsection
 
-@push('scripts')
+    @if ($hasCategories)
+        <dialog
+            class="fixed inset-0 m-auto w-[min(600px,calc(100vw-2rem))] max-w-none overflow-hidden overscroll-contain rounded-2xl border-0 bg-white p-0 text-left text-gray-900 shadow-[0_24px_72px_rgba(15,23,42,0.28)] backdrop:bg-[rgba(15,23,42,0.48)]"
+            data-task-title-readiness-dialog
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="task-title-readiness-title"
+            aria-describedby="task-title-readiness-summary task-title-readiness-recommendation"
+        >
+            <div class="flex max-h-[min(760px,calc(100dvh-2rem))] flex-col">
+                <header class="flex items-start gap-4 px-6 pb-5 pt-6 max-[520px]:px-5">
+                    <span class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-600" data-task-readiness-icon-wrap aria-hidden="true">
+                        <i data-lucide="triangle-alert" class="h-5 w-5" data-task-readiness-icon></i>
+                    </span>
+                    <div class="min-w-0 flex-1">
+                        <p class="text-xs font-semibold uppercase tracking-[0.14em] text-gray-500">{{ $t('task_create.readiness.dialog_eyebrow') }}</p>
+                        <h2 id="task-title-readiness-title" class="mt-1 text-xl font-semibold leading-7 text-gray-900 text-balance" data-task-readiness-title>{{ $t('task_create.readiness.dialog_blocked_title') }}</h2>
+                    </div>
+                    <button type="button" class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-gray-500 transition-[background-color,color,transform] duration-150 [@media(hover:hover)]:hover:bg-gray-100 [@media(hover:hover)]:hover:text-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 active:scale-[.96]" data-task-readiness-close aria-label="{{ $t('task_create.readiness.actions.close') }}">
+                        <i data-lucide="x" class="h-5 w-5" aria-hidden="true"></i>
+                    </button>
+                </header>
+
+                <div class="grid grid-cols-4 divide-x divide-gray-200 border-y border-gray-200 bg-gray-50 max-[520px]:grid-cols-2 max-[520px]:divide-x-0">
+                    @foreach ([
+                        'remaining' => $t('task_create.readiness.stats.remaining'),
+                        'total' => $t('task_create.readiness.stats.total'),
+                        'used' => $t('task_create.readiness.stats.used'),
+                        'available' => $t('task_create.readiness.stats.available'),
+                    ] as $statKey => $statLabel)
+                        <div class="px-4 py-3 max-[520px]:border-b max-[520px]:border-gray-200 max-[520px]:px-5">
+                            <p class="text-[11px] font-medium leading-4 text-gray-500">{{ $statLabel }}</p>
+                            <p class="mt-0.5 text-lg font-semibold leading-6 text-gray-900 tabular-nums" data-task-readiness-stat="{{ $statKey }}">0</p>
+                        </div>
+                    @endforeach
+                </div>
+
+                <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-5 max-[520px]:px-5">
+                    <p id="task-title-readiness-summary" class="text-sm leading-6 text-gray-700 text-pretty" data-task-readiness-summary></p>
+                    <div class="mt-5 space-y-3" data-task-readiness-issues></div>
+                    <div class="mt-5 rounded-xl bg-gray-50 px-4 py-3.5">
+                        <p id="task-title-readiness-recommendation" class="text-sm leading-6 text-gray-700 text-pretty" data-task-readiness-recommendation></p>
+                        <p class="mt-2 hidden text-sm font-medium leading-6 text-amber-800" data-task-readiness-paused-hint hidden></p>
+                    </div>
+                </div>
+
+                <footer class="flex flex-wrap justify-end gap-2.5 border-t border-gray-100 bg-gray-50 px-6 py-4 max-[520px]:flex-col max-[520px]:px-5">
+                    <button type="button" class="inline-flex min-h-10 items-center justify-center rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 transition-[background-color,border-color,color,transform] duration-150 [@media(hover:hover)]:hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 active:scale-[.96] max-[520px]:w-full" data-task-readiness-close>{{ $t('task_create.readiness.actions.close') }}</button>
+                    <a href="#" target="_blank" rel="noopener" class="inline-flex min-h-10 items-center justify-center rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 transition-[background-color,border-color,color,transform] duration-150 [@media(hover:hover)]:hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 active:scale-[.96] max-[520px]:w-full" data-task-readiness-manage>{{ $t('task_create.readiness.actions.manage_library') }}</a>
+                    <button type="button" class="hidden inline-flex min-h-10 items-center justify-center rounded-lg border border-amber-300 bg-amber-50 px-4 text-sm font-semibold text-amber-900 transition-[background-color,transform] duration-150 [@media(hover:hover)]:hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2 active:scale-[.96] max-[520px]:w-full" data-task-readiness-adjust hidden></button>
+                    <button type="button" class="hidden inline-flex min-h-10 items-center justify-center rounded-lg border border-amber-300 bg-amber-50 px-4 text-sm font-semibold text-amber-900 transition-[background-color,transform] duration-150 [@media(hover:hover)]:hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2 active:scale-[.96] max-[520px]:w-full" data-task-readiness-loop hidden>{{ $t('task_create.readiness.actions.enable_loop') }}</button>
+                    <button type="button" class="hidden inline-flex min-h-10 items-center justify-center rounded-lg bg-gray-800 px-4 text-sm font-semibold text-white transition-[background-color,transform] duration-150 [@media(hover:hover)]:hover:bg-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-600 focus-visible:ring-offset-2 active:scale-[.96] max-[520px]:w-full" data-task-readiness-pause hidden>{{ $t('task_create.readiness.actions.save_paused') }}</button>
+                    <button type="button" class="hidden inline-flex min-h-10 items-center justify-center rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition-[background-color,transform] duration-150 [@media(hover:hover)]:hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 active:scale-[.96] max-[520px]:w-full" data-task-readiness-acknowledge hidden>{{ $t('task_create.readiness.actions.acknowledge') }}</button>
+                    <button type="button" class="hidden inline-flex min-h-10 items-center justify-center rounded-lg border border-blue-300 bg-blue-50 px-4 text-sm font-semibold text-blue-800 transition-[background-color,transform] duration-150 [@media(hover:hover)]:hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 active:scale-[.96] max-[520px]:w-full" data-task-readiness-retry hidden>{{ $t('task_create.readiness.actions.retry') }}</button>
+                    <button type="button" class="hidden inline-flex min-h-10 items-center justify-center rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition-[background-color,transform] duration-150 [@media(hover:hover)]:hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 active:scale-[.96] max-[520px]:w-full" data-task-readiness-server hidden>{{ $t('task_create.readiness.actions.server_check') }}</button>
+                </footer>
+            </div>
+        </dialog>
+
+        <script type="application/json" data-task-form-i18n>@json($taskFormI18n)</script>
+        <script type="application/json" data-task-title-readiness-initial>@json($initialTitleReadinessReport)</script>
+    @endif
+    @if(!$isEdit)
     <script>
-        document.addEventListener('DOMContentLoaded', function () {
-            const isEditMode = @json($isEdit);
-
-            if (typeof lucide !== 'undefined') {
-                lucide.createIcons();
-            }
-
-            const imageLibrarySelect = document.getElementById('image_library_id');
-            const imageCountSelect = document.getElementById('image_count');
-            const needReviewCheckbox = document.getElementById('need_review');
-            const publishIntervalInput = document.getElementById('publish_interval');
-            const articleLimitInput = document.getElementById('article_limit');
-            const draftLimitInput = document.getElementById('draft_limit');
-            const fixedCategorySection = document.getElementById('fixed-category-section');
-            const fixedCategorySelect = document.getElementById('fixed_category_id');
-            const categoryModeRadios = document.querySelectorAll('input[name="category_mode"]');
-            const publishScopeRadios = document.querySelectorAll('[data-publish-scope-option]');
-            const distributionChannelInputs = document.querySelectorAll('[data-distribution-channel-input]');
-            const form = document.querySelector('form');
-
-            if (!form) {
-                return;
-            }
-
-            function toggleImageCountByLibrary() {
-                if (!imageLibrarySelect.value) {
-                    imageCountSelect.value = '0';
-                    imageCountSelect.disabled = true;
-                } else {
-                    imageCountSelect.disabled = false;
-                    if (imageCountSelect.value === '0') {
-                        imageCountSelect.value = '1';
-                    }
-                }
-            }
-
-            function togglePublishInterval() {
-                if (needReviewCheckbox.checked) {
-                    publishIntervalInput.disabled = true;
-                    publishIntervalInput.parentElement.style.opacity = '0.5';
-                } else {
-                    publishIntervalInput.disabled = false;
-                    publishIntervalInput.parentElement.style.opacity = '1';
-                }
-            }
-
-            function handleCategoryModeChange() {
-                const selected = document.querySelector('input[name="category_mode"]:checked');
-                if (!selected) {
-                    return;
-                }
-
-                if (selected.value === 'fixed') {
-                    fixedCategorySection.classList.remove('hidden');
-                    fixedCategorySelect.required = true;
-                } else {
-                    fixedCategorySection.classList.add('hidden');
-                    fixedCategorySelect.required = false;
-                    fixedCategorySelect.value = '';
-                }
-            }
-
-            function syncDraftLimitMax() {
-                const articleLimit = Math.max(1, Number(articleLimitInput.value || 1));
-                draftLimitInput.max = String(articleLimit);
-                if (Number(draftLimitInput.value || 1) > articleLimit) {
-                    draftLimitInput.value = String(articleLimit);
-                }
-            }
-
-            function syncDistributionChannelsByScope() {
-                const selectedScope = document.querySelector('input[name="publish_scope"]:checked');
-                const isLocalOnly = selectedScope && selectedScope.value === 'local_only';
-
-                distributionChannelInputs.forEach((input) => {
-                    input.disabled = isLocalOnly;
-                    if (isLocalOnly) {
-                        input.checked = false;
-                    }
-
-                    const card = input.closest('[data-distribution-channel-card]');
-                    if (!card) {
-                        return;
-                    }
-
-                    card.classList.toggle('cursor-pointer', !isLocalOnly);
-                    card.classList.toggle('hover:border-blue-300', !isLocalOnly);
-                    card.classList.toggle('hover:bg-blue-50', !isLocalOnly);
-                    card.classList.toggle('cursor-not-allowed', isLocalOnly);
-                    card.classList.toggle('bg-gray-50', isLocalOnly);
-                    card.classList.toggle('opacity-50', isLocalOnly);
-                });
-            }
-
-            imageLibrarySelect.addEventListener('change', toggleImageCountByLibrary);
-            needReviewCheckbox.addEventListener('change', togglePublishInterval);
-            articleLimitInput.addEventListener('input', syncDraftLimitMax);
-            categoryModeRadios.forEach((radio) => radio.addEventListener('change', handleCategoryModeChange));
-            publishScopeRadios.forEach((radio) => radio.addEventListener('change', syncDistributionChannelsByScope));
-
-            form.addEventListener('submit', function (event) {
-                if (!document.getElementById('task_name').value.trim()) {
-                    alert(@json(__('admin.task_create.error.name_required')));
-                    event.preventDefault();
-                    return;
-                }
-
-                if (!document.getElementById('title_library_id').value) {
-                    alert(@json(__('admin.task_create.error.title_library_required')));
-                    event.preventDefault();
-                    return;
-                }
-
-                if (!document.getElementById('prompt_id').value) {
-                    alert(@json(__('admin.task_create.error.prompt_required')));
-                    event.preventDefault();
-                    return;
-                }
-
-                if (!document.getElementById('ai_model_id').value) {
-                    alert(@json(__('admin.task_create.error.ai_model_required')));
-                    event.preventDefault();
-                    return;
-                }
-
-                if (Number(draftLimitInput.value || 0) > Number(articleLimitInput.value || 0)) {
-                    alert(@json(__('admin.task_create.error.draft_limit_too_large')));
-                    event.preventDefault();
-                    return;
-                }
-
-                if (!isEditMode && !confirm(@json(__('admin.task_create.confirm.create')))) {
-                    event.preventDefault();
-                }
-            });
-
-            toggleImageCountByLibrary();
-            togglePublishInterval();
-            handleCategoryModeChange();
-            syncDraftLimitMax();
-            syncDistributionChannelsByScope();
-        });
+    (()=>{const form=document.querySelector('[data-task-form]');if(!form)return;const key='geoflow:task:new:article';try{const entries=JSON.parse(sessionStorage.getItem(key)||'null');if(entries&&!@json($errors->any())){for(const [name,value]of entries){const nodes=Array.from(form.elements).filter(n=>n.name===name);for(const n of nodes){if(n.type==='checkbox'||n.type==='radio')n.checked=String(n.value)===String(value);else if(!n.multiple)n.value=value;}}}}catch{}const save=()=>{try{sessionStorage.setItem(key,JSON.stringify(Array.from(new FormData(form).entries()).filter(([n])=>!['_token','content_type'].includes(n))));}catch{}};document.querySelector('[data-task-type-chooser]')?.addEventListener('click',save);form.addEventListener('submit',()=>{try{sessionStorage.removeItem(key);}catch{}});})();
     </script>
-@endpush
+    @endif
+@endsection

@@ -2,7 +2,10 @@
 
 namespace App\Http\Middleware;
 
-use App\Models\Article;
+use App\Services\Site\SiteScopedArticleQuery;
+use App\Services\SystemUpdater\RecoveryState;
+use App\Support\Site\CurrentSite;
+use App\Support\Site\SiteThemePreviewContext;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -14,6 +17,11 @@ use Symfony\Component\HttpFoundation\Response;
  */
 class RecordSiteViewLog
 {
+    public function __construct(
+        private readonly CurrentSite $currentSite,
+        private readonly SiteScopedArticleQuery $siteArticles,
+    ) {}
+
     /**
      * @param  Closure(Request): Response  $next
      */
@@ -21,9 +29,16 @@ class RecordSiteViewLog
     {
         $response = $next($request);
 
-        if (! in_array(strtoupper((string) $request->method()), ['GET', 'HEAD'], true)) {
+        if ($request->attributes->get('link_pool.theme_readback') === true || strtoupper((string) $request->method()) !== 'GET') {
             return $response;
         }
+
+        $state = app(RecoveryState::class)->snapshot();
+        if ($state !== null && $state['phase'] !== 'ready') {
+            return $response;
+        }
+
+        $this->recordCanonicalArticleRead($request, $response);
 
         if (! Schema::hasTable('view_logs')) {
             return $response;
@@ -32,7 +47,8 @@ class RecordSiteViewLog
         try {
             DB::table('view_logs')->insert([
                 'article_id' => $this->resolveArticleId($request, $response),
-                'source' => 'local',
+                'hosted_site_profile_id' => $this->currentSite->profileId(),
+                'source' => $this->currentSite->isHosted() ? 'hosted_site' : 'local',
                 'method' => strtoupper((string) $request->method()),
                 'path' => $this->path($request),
                 'route_name' => $request->route()?->getName(),
@@ -49,8 +65,29 @@ class RecordSiteViewLog
         return $response;
     }
 
+    private function recordCanonicalArticleRead(Request $request, Response $response): void
+    {
+        $articleId = $request->attributes->get('article_permalink.article_id');
+        if ($response->getStatusCode() !== 200
+            || ! is_numeric($articleId)
+            || app(SiteThemePreviewContext::class)->isActive()) {
+            return;
+        }
+
+        try {
+            $this->siteArticles->query()->whereKey((int) $articleId)->toBase()->increment('view_count');
+        } catch (\Throwable) {
+            // 阅读计数不能影响已经成功生成的页面响应。
+        }
+    }
+
     private function resolveArticleId(Request $request, Response $response): ?int
     {
+        $resolvedArticleId = $request->attributes->get('article_permalink.article_id');
+        if ($response->getStatusCode() < 400 && is_numeric($resolvedArticleId)) {
+            return (int) $resolvedArticleId;
+        }
+
         if ($response->getStatusCode() >= 400 || $request->route()?->getName() !== 'site.article') {
             return null;
         }
@@ -60,9 +97,8 @@ class RecordSiteViewLog
             return null;
         }
 
-        $articleId = Article::query()
+        $articleId = $this->siteArticles->query()
             ->where('slug', $slug)
-            ->whereNull('deleted_at')
             ->value('id');
 
         return $articleId !== null ? (int) $articleId : null;

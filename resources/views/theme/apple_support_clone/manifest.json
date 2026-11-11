@@ -1,0 +1,80 @@
+{
+  "id": "apple_support_clone",
+  "name": "Apple 支持页风格",
+  "version": "1.0.0",
+  "mode": "clone",
+  "framework": "laravel",
+  "geoflow_contract": "site-theme-view-resolver",
+  "created_at": "2026-05-30",
+  "description": "参考 Apple 官网与 Apple Support 风格的 GEOFlow 前端主题，保留 GEOFlow 路由与文章、分类数据结构。",
+  "source_reference_url": [
+    "https://www.apple.com/",
+    "https://support.apple.com/en-us/102655",
+    "https://support.apple.com/mac"
+  ],
+  "compatible_pages": [
+    "home",
+    "article",
+    "category",
+    "about"
+  ],
+  "compatible_modules": [
+    "layout",
+    "home.hero",
+    "home.featured_articles",
+    "home.latest_articles",
+    "category.header",
+    "category.article_list",
+    "article.header",
+    "article.prose",
+    "article.tags",
+    "article.related_articles",
+    "article.sticky_ad",
+    "about.default_fallback"
+  ],
+  "preview_routes": [
+    "/",
+    "/category/{slug}",
+    "/article/{slug}",
+    "/about"
+  ],
+  "requires_admin_activation": true,
+  "blade_templates": [
+    "layout.blade.php",
+    "home.blade.php",
+    "article.blade.php",
+    "category.blade.php",
+    "partials/article-card.blade.php"
+  ],
+  "fallback_templates": [],
+  "notes": "Preview requires selecting this theme in admin site settings or using static rendered review, because this Laravel app has no isolated theme preview route.",
+  "requires": {
+    "views": [
+      "site.partials.friend-links"
+    ]
+  },
+    "topic": {
+        "contract": 1,
+        "layouts": [
+            {
+                "id": "default",
+                "name": "标准聚合",
+                "view": "site.topics.templates.default"
+            },
+            {
+                "id": "guide",
+                "name": "阅读指南",
+                "view": "site.topics.templates.guide"
+            },
+            {
+                "id": "roundup",
+                "name": "资讯盘点",
+                "view": "site.topics.templates.roundup"
+            }
+        ],
+        "homepage_module": {
+            "view": "site.partials.topic-home",
+            "enabled": true
+        }
+    }
+}

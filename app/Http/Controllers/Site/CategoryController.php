@@ -5,9 +5,14 @@ namespace App\Http\Controllers\Site;
 use App\Http\Controllers\Controller;
 use App\Models\Article;
 use App\Models\Category;
+use App\Models\CategorySlugHistory;
+use App\Services\Site\SiteScopedArticleQuery;
+use App\Services\Site\SiteUrlGenerator;
 use App\Support\Site\ArticleHtmlPresenter;
 use App\Support\Site\SiteSettingsBag;
 use App\Support\Site\SiteThemeViewResolver;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\View\View;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
@@ -17,11 +22,47 @@ use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
  */
 class CategoryController extends Controller
 {
-    public function show(string $slug): View
+    public function __construct(
+        private readonly SiteScopedArticleQuery $siteArticles,
+        private readonly SiteUrlGenerator $urls,
+    ) {}
+
+    public function show(Request $request, string $slug): View|RedirectResponse
     {
-        $category = Category::query()->where('slug', $slug)->first();
+        $path = (string) parse_url($request->getRequestUri(), PHP_URL_PATH);
+        if (preg_match('/%(?![0-9a-f]{2})|%(?:2f|5c)/i', $path) === 1
+            || ! mb_check_encoding($slug, 'UTF-8')
+            || preg_match('/[\x00-\x1f\x7f\\\\\/]/u', $slug) === 1
+            || in_array($slug, ['.', '..'], true)) {
+            throw new NotFoundHttpException(__('site.category_not_found'));
+        }
+
+        $visibleCategories = Category::query()
+            ->whereHas('articles', fn ($query) => $this->siteArticles->apply($query));
+        $category = (clone $visibleCategories)->where('slug', $slug)->first();
+        if (! $category instanceof Category && Schema::hasTable('category_slug_histories')) {
+            $categoryId = CategorySlugHistory::query()->where('slug', $slug)->value('category_id');
+            $category = $categoryId !== null
+                ? $visibleCategories->whereKey((int) $categoryId)->first()
+                : null;
+        }
         if (! $category instanceof Category) {
             throw new NotFoundHttpException(__('site.category_not_found'));
+        }
+
+        if (! hash_equals((string) $category->slug, $slug)) {
+            $target = $this->urls->category($category);
+            $query = explode('?', $request->getRequestUri(), 2)[1] ?? '';
+            if (preg_match('/[\x00-\x1f\x7f]/', $query) === 1) {
+                throw new NotFoundHttpException(__('site.category_not_found'));
+            }
+            if ($query !== '') {
+                $target .= (str_contains($target, '?') ? '&' : '?').$query;
+            }
+
+            return redirect()->to($target, 301)->withHeaders([
+                'Cache-Control' => 'public, max-age=3600, s-maxage=300',
+            ]);
         }
 
         $map = SiteSettingsBag::all();
@@ -29,11 +70,39 @@ class CategoryController extends Controller
         $siteTitle = (string) ($map['site_name'] ?? config('geoflow.site_name', config('app.name')));
         $siteDescription = (string) ($map['site_description'] ?? config('geoflow.site_description', ''));
         $siteKeywords = (string) ($map['site_keywords'] ?? config('geoflow.site_keywords', ''));
+        $requestedYear = $request->query('year');
+        $selectedYear = is_string($requestedYear) && preg_match('/^(?:19|20)\d{2}$/D', $requestedYear) === 1
+            ? (int) $requestedYear
+            : null;
 
-        $articles = Article::query()
-            ->with(['category', 'author'])
-            ->published()
+        $dateBounds = $this->siteArticles->query()
             ->where('category_id', $category->id)
+            ->selectRaw('MIN(COALESCE(published_at, created_at)) AS oldest_date, MAX(COALESCE(published_at, created_at)) AS newest_date')
+            ->first();
+        $oldestYear = $dateBounds?->oldest_date ? max(1900, (int) substr((string) $dateBounds->oldest_date, 0, 4)) : null;
+        $newestYear = $dateBounds?->newest_date ? min(2099, (int) substr((string) $dateBounds->newest_date, 0, 4)) : null;
+        $years = $oldestYear && $newestYear && $oldestYear <= $newestYear
+            ? range($newestYear, $oldestYear)
+            : [];
+
+        $articleQuery = $this->siteArticles->query()
+            ->with(['category', 'author'])
+            ->where('category_id', $category->id);
+        if ($selectedYear !== null) {
+            $start = sprintf('%04d-01-01 00:00:00', $selectedYear);
+            $end = sprintf('%04d-01-01 00:00:00', $selectedYear + 1);
+            $articleQuery->where(function ($query) use ($start, $end): void {
+                $query->where('published_at', '>=', $start)
+                    ->where('published_at', '<', $end)
+                    ->orWhere(function ($fallback) use ($start, $end): void {
+                        $fallback->whereNull('published_at')
+                            ->where('created_at', '>=', $start)
+                            ->where('created_at', '<', $end);
+                    });
+            });
+        }
+
+        $articles = $articleQuery
             ->orderByDesc('published_at')
             ->orderByDesc('id')
             ->paginate($perPage)
@@ -48,9 +117,8 @@ class CategoryController extends Controller
 
         $hotArticles = collect();
         if (Schema::hasColumn('articles', 'is_hot')) {
-            $hotArticles = Article::query()
+            $hotArticles = $this->siteArticles->query()
                 ->with(['category', 'author'])
-                ->published()
                 ->where('category_id', $category->id)
                 ->where('is_hot', true)
                 ->orderByDesc('published_at')
@@ -70,12 +138,16 @@ class CategoryController extends Controller
             'articles' => $articles,
             'hotArticles' => $hotArticles,
             'cardSummaries' => $summaries,
+            'yearOptions' => $years,
+            'selectedYear' => $selectedYear,
             'siteTitle' => $siteTitle,
             'siteDescription' => $siteDescription,
             'siteKeywords' => $siteKeywords,
             'pageTitle' => $pageTitle,
             'pageDescription' => $pageDescription,
-            'canonicalUrl' => route('site.category', $category->slug),
+            'pageKeywords' => $siteKeywords,
+            'pageOgType' => 'website',
+            'canonicalUrl' => $this->urls->category($category),
         ]);
     }
 }

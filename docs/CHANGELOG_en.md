@@ -2,6 +2,473 @@
 
 This document tracks user-facing updates in the public repository. For future GitHub pushes, update this file together with the Chinese version in `CHANGELOG.md`.
 
+## 2026-11-10
+
+### v3.2.1
+
+Core moves to stable `3.2.1`, bringing together the 3.2 preview work and subsequent public repository updates, with synchronized metadata and READMEs in six languages; consult GitHub Releases for published assets and upgrade notes.
+
+- Production images install locked dependencies from the public npm registry and retain integrity checks. Installation examples use the version document attached to the latest stable GitHub Release.
+- Upgrading from 3.1.0 applies 28 new migrations in a maintenance window. Managed deployments use Updater 0.5.0 with protocol 5. See the [3.2.1 upgrade guide](deployment/GEOFLOW_V3_2_1_UPGRADE_en.md).
+
+#### Topics and content production
+
+- Add topics and AI topic tasks with source grouping, bulk creation, review, publication, scheduled maintenance, and three reading layouts, connected to the homepage, navigation, article backlinks, and Sitemap.
+- Add PDF and PPTX text extraction to knowledge bases and enterprise knowledge alongside TXT, Markdown, and DOCX imports, with OCR required first for scans and image-only documents.
+- Use image library remarks and tags for AI article illustrations, enforce task image limits, and fall back to interval insertion when the model selects none.
+- Improve bulk article actions, score-based AI approval, and automatic publication while preserving manual holds, rejection, and quality blocks and preventing late results from overwriting newer human decisions.
+
+#### Assisted platform publishing and AI visibility
+
+- Connect Toutiao, Sohu, and NetEase web channels to manual work orders and the Chrome assistant, with assignment, result receipts, and exception reconciliation, while operators confirm final publication.
+- Add topic assignment, source and competitor evidence, and word-cloud cleanup to AI visibility, alongside keyword-library collection and source analysis.
+
+#### Runtime and upgrades
+
+- Fix production Redis AOF persistence, AI model connection hints, category filters, and hosted theme access, and add GEO discovery files and validated short theme videos.
+- Back up the database, themes, and configuration, drain old workers in a maintenance window, apply the upgrade-plan migrations, build frontend assets, and restart runtime processes.
+- CLI `0.4.0-preview.2` and Skill `1.2.0-preview.2` retain their preview status, managed upgrades use signed packages and an Updater build explicitly compatible with Core `3.2.1`, and remote theme publication and rollback remain pending.
+
+#### Theme compatibility across versions
+
+- Frontend theme packages default to the entire 3.x series, including 3.1, 3.2, 3.3, patch releases, and previews, while explicit minimum versions and feature dependencies remain enforced.
+- Legacy packages with an automatically generated exact version lock use major-version compatibility during import and re-export, preserving original files and installation receipts.
+- Ordinary themes use the basic compatible package format, topic themes declare their actual interface dependencies, and the inspection page shows the supported range and version mismatch details.
+
+#### Dependency security fixes
+
+- Update affected Symfony components in the application and standalone CLI to 7.4.23, fixing upstream issues in request URLs, proxy trust, route matching, filesystem paths, and YAML parsing while keeping dependency declarations and the package set unchanged.
+
+See the [Symfony security advisory](https://symfony.com/cve-2026-118516) and [Filesystem advisory](https://github.com/symfony/symfony/security/advisories/GHSA-6prc-h956-hxjq).
+
+#### AI visibility collection panel
+
+- The keyword collection panel shows the selected count per library and overall, keeps the selection limit aligned with the server validation, and clears the excess selection automatically.
+- Keywords successfully collected in the last 7 days are marked and skipped by Select all. Manual selection allows resampling, failed requests remain retryable, and keyword matching uses the normalization applied to topic assignment.
+
+#### Volcengine multimodal embeddings
+
+- Fix Volcengine multimodal embedding connection tests, knowledge indexing, and queries, with one official API request and quota/usage record per independent text.
+- Multimodal models using `ep-*` IDs require the full `/embeddings/multimodal` URL; text models keep their existing endpoint, and switching protocols requires a knowledge index resync.
+
+See [Knowledge document import](knowledge-import.md#火山方舟-embedding-配置) for configuration.
+
+#### Link pool and live prompt testing
+
+- Distribution management adds internal link placement for the primary site and first-party hosted sites, including a link library, import preflight, campaigns, recommendation previews, site controls, and an emergency stop.
+- Article recommendations support site articles and health-checked external links, selected by source site, category, keywords, and campaign rules. Metrics distinguish server output, reader visibility, and clicks.
+- Site themes can report recommendation support. Super administrators can adapt and roll back themes when shared storage and HTTP readback are available.
+- Prompt editing adds live testing of unsaved drafts, knowledge retrieval, manual or library titles, streamed generation, cancellation, and AI diagnostics linked to source text.
+- Theme adaptation and prompt testing follow administrator model access, quota, and usage auditing. Regression checks cover queue cache refresh, displayed-link metrics, desktop layouts, and mobile layouts.
+- Three link-pool migrations require maintenance mode. Back up the database and themes, build frontend assets, and drain old workers before upgrading.
+
+See [Link pool and live prompt testing](operations/link-pool-and-prompt-test.md) for configuration, operation, and metric definitions.
+
+#### Egress proxy for WAF-protected targets
+
+- The hardened outbound gateway can route an explicit host allowlist through an egress proxy; direct connections remain the default and the proxy is only enabled when both GEOFLOW_OUTBOUND_PROXY and GEOFLOW_OUTBOUND_PROXY_HOSTS are configured.
+- Proxied connections use the validated target IP while preserving Host and TLS verification; exact private-target exceptions remain direct. Supported proxy schemes are http, https, socks5 and socks5h.
+- Added operator documentation: [Egress proxy for WAF-protected targets](operations/outbound-egress-proxy.md).
+
+## 2026-10-01
+
+### v3.2.0-beta.2 (historical preview)
+
+This section preserves preview changes since `v3.2.0-beta.1`, when the GitHub Release and distribution archives were still pending; see `v3.2.1` above for the subsequent stable version.
+
+#### Topics and theme management
+
+- Content management adds a topic library with article grouping, ordering, bulk creation, review, publication, and recoverable trash.
+- Topic tasks use title libraries and AI generation, with per-row scopes and layouts, source validation, scheduled maintenance, pause and resume, and failed-run retries.
+- Public topic lists and detail pages provide structured summaries, genuine update dates, tags, source citations, FAQs, and three reading layouts.
+- Built-in themes support topic navigation, homepage modules, and article backlinks, while canonical paths, pagination, and sitemaps follow publication eligibility.
+- Theme settings separate the current theme, six curated themes, personal themes, and archives, with search, version groups, bulk archive and restore, and previews.
+- The GEOFlow Skill adds topic management, task creation, and topic theme design, replication, and editing workflows.
+
+#### Article workflows and admin fixes
+
+- Article bulk actions use the current selection and report success, no change, blocked, conflict, or failure for each article.
+- Task auto-publication consistently follows review settings, the current AI passing score, and publication intervals, while respecting manual holds, rejection, pauses, and explicit non-publication markers in article text.
+- Late quality and optimization results cannot override newer manual actions, while publication and distribution are recorded separately with recoverable delivery handoffs.
+- Fix fixed and random category assignment, SEO keyword and summary settings, and add a preview-and-review tool for restoring historical article workflows.
+- Fix blank pages after saving AI Workspace settings, settings sections staying collapsed after canceling URL changes, and the DeepSeek API key placeholder.
+- Keep long site names within narrow screens in the news theme and preserve usable mobile navigation on home, article, and topic pages.
+
+#### GEO discovery, theme video, and security
+
+- The primary site automatically serves `llms.txt` and `sitemap.txt`, while target-site packages add discovery files and sitemap shards that respect crawl policies and public-content eligibility.
+- Theme packages support validated short videos with click-to-play behavior, with video validation dependencies, upload limits, and request rate limits included in official containers.
+- Apply security fixes to the framework, Markdown parser, file storage, frontend request library, and HTML sanitizer.
+
+#### Versions and upgrade notes
+
+- Companion source versions are Core `3.2.0-beta.2`, CLI `0.4.0-preview.2`, and Skill `1.2.0-preview.2`, with an Updater build that explicitly declares compatibility with this Core contract.
+- Upgrading from `beta.1` adds nine maintenance-mode migrations, two for article workflows and seven for topics; back up the database, themes, and configuration, drain old workers, build frontend assets, and upgrade during maintenance.
+- API/CLI creation of article tasks requires an explicit `need_review` field; recheck older AI quality reports, keep historical held articles unchanged, and preview and review each restoration.
+- Theme videos require `ffprobe`, so custom runtime environments need the documented dependency and verified upload limits.
+- This remains a development and isolated-testing preview, with official signed distribution, native dual-architecture recovery, and production acceptance pending, while remote theme publication and rollback remain unavailable.
+
+See [Topics and theme management](implementations/topic-channel-implementation.md), [Article workflow recovery](operations/article-workflow-recovery.md), [Theme packages and video](site-themes/theme-packages.md), and [Remote management preview scope](api/remote-management-preview.md).
+
+## 2026-09-16
+
+### v3.2.0-beta.1
+
+- Core advances to `3.2.0-beta.1`; CLI `0.4.0-preview.1` adds a standalone PHAR, signed-bundle installation and interrupted-update recovery, named profiles, explicit login scopes, identity binding, and current-token revocation.
+- Task enqueue gains receipts and client request IDs for lost-response lookup, duplicate protection, and recovery after logging back into the same account. Theme drafts do not yet support receipt recovery.
+- Built-in and installed primary-site themes support remote drafts, chunked file reads, atomic incremental changes, signed previews with real content, and discard, without manual theme-package round trips for draft editing.
+- Native template code requires a trusted super administrator, explicit code scope, and a short-lived password grant. Admin appearance writes share a lock and version conflict checks.
+- Skill `1.2.0-preview.1` defaults to the remote CLI. Added operation/route coverage records, a preview contract, and CI installation verification.
+- Core and Updater add remote action plans, durable admission records, and receipt lookup. Full recovery records a recovery epoch, invalidates old credentials, and quarantines background work; uncertain responses are reconciled through the original receipt without automatic resend.
+- Five maintenance-mode migrations extend the data model. Theme publication, rollback, full administration, multiple sites, and official signed distribution remain pending; see [current coverage](api/remote-management-preview.md).
+
+## 2026-09-13
+
+### URL change risk controls
+
+- Primary/hosted article rules, existing category URL identifiers and link-changing article category moves require a super administrator, an impact check, a centered risk dialog and typed confirmation. API and automation requests cannot bypass this workflow.
+- Added category identifier history, deleted-name reservations, scope data versions and change records, with stale-report detection, concurrency checks, idempotent confirmation and direct historical-address redirects.
+- Impact checks, private migration files, sitemaps and hosted URL refreshes run in resumable batches with explicit failure states. Upgrading preserves current URL rules and the configured admin path.
+- See the [URL risk-control operations guide](deployment/URL_CHANGE_RISK_CONTROL.md) for upgrade requirements, resource limits and measured results.
+
+## 2026-09-12
+
+### Article permalink rules
+
+- Site settings now provide six permalink presets and constrained custom patterns built from `{slug}`, `{id}`, `{category}`, `{year}`, `{month}`, and `{day}`.
+- Activation uses a check-and-preview confirmation flow with a downloadable migration map. Historical patterns, old slugs, old categories, mismatched dates, and `/article/{slug}` compatibility URLs redirect once to the current canonical URL.
+- Canonical metadata, Open Graph, JSON-LD, internal article links, sitemaps, view analytics, and first-party hosted-site remote URLs now share the same permalink generator.
+- First-party hosted sites can use independent policies. GEOFlow Agent target packages now advertise capability 1.3 with dynamic matching, a private static manifest, atomic activation, and Apache, Nginx, and BaoTa fallbacks.
+
+## 2026-09-11
+
+### Local reverse-proxy origin fidelity
+
+- Fixed local Docker gateway handling when a host reverse proxy terminates TLS, so admin forms and redirects retain the public HTTPS scheme and port.
+- Local Compose now trusts only its direct Nginx caller by default and validates forwarded schemes and ports. Subdirectory deployments use `GEOFLOW_FORWARDED_PREFIX` as the fixed public prefix, overriding the client-supplied header.
+- Upgrade note: root Compose deployments that previously relied only on an outer proxy to send `X-Forwarded-Prefix` must add the fixed prefix to `.env` before rebuilding the `web` container.
+
+### Idempotent WordPress distribution
+
+- WordPress distribution now reuses the known remote post ID for each article and channel. Saving unchanged content skips delivery, while content or channel changes update the same remote post.
+- When a WordPress create request times out, returns a server error, or omits a valid ID, GEOFlow reconciles the result by slug across post statuses. Results that cannot be identified uniquely are marked for manual reconciliation and excluded from automatic retries.
+- Immediate admin updates and deletions use dedicated action records while retaining the publish mapping. Remote ID conflicts preserve the known identity and block further overwrites.
+
+## 2026-09-09
+
+### v3.1.0
+
+- GEOFlow Updater `0.4.0` adds blue/green deployment, signed plan previews, automatic migrations and backfills, full backups and recovery, with separate admin actions for application switch-back preserving live data and complete data restoration.
+- AI Workspace can collect task parameters through conversation and create task drafts, with clearer connection, model-readiness and failure states.
+- Site themes support package import, isolated preview, installation and export; installed themes survive application upgrades, while imported packages must declare compatibility with the current Core version.
+- AI visibility supports bulk keyword collection, competitor detection, competitor mention statistics and source analysis.
+- Add Traditional Chinese admin and editor text, and restore the knowledge outline in fullscreen editing.
+- Improve AI quality result parsing for GLM and MiniMax, remove reasoning text from MiniMax-generated articles, and fix Doubao search failures caused by empty domain filters.
+- Fix invalid empty-string comparisons against PostgreSQL UUID lease fields during task recovery, and include companion Updater fixes for interrupted recovery, scheduler draining, startup health and network recreation.
+- Component versions: Core `3.1.0`, Updater `0.4.0`, bundled CLI `0.2.0`, and Chrome operations assistant `0.1.0`; official releases provide the source ZIP, SHA-256, version document and signed dual-architecture updater packages.
+
+See the [3.1 upgrade instructions](deployment/GEOFLOW_V3_1_UPGRADE_en.md). Enrolled `3.0.0` sites confirm the first maintenance upgrade through the host CLI; unenrolled older sites first upgrade to the matching signed version during maintenance, then enroll. This release uses a maintenance plan, and initial blue/green conversion requires a maintenance window.
+
+### README version guidance
+
+- READMEs in all six languages now identify the current `3.0.x` series, explain that `main` may contain unreleased changes, and link to the exact source version, official releases, and upgrade notes.
+
+## 2026-09-05
+
+### v3.0.0
+
+#### Administrator AI model isolation and sharing
+
+- AI model configurations now have explicit owners and access scopes; standard administrators can manage personal models or use user-content models shared by a designated super administrator, with personal models preferred before shared fallbacks.
+- New standard administrators start with independent configuration, while explicit backfill commands cover historical administrators and models; disabling sharing, deactivating an account, changing a role, or archiving a model increments the access version and blocks later provider calls and stale result persistence.
+- Content generation, title generation, article optimization and inspection, Knowledge Fact AI generation, Enterprise Knowledge, URL imports, AI Workspace, API, CLI, queues, and recovery jobs now carry explicit execution identities, while model usage is attributed to the configuration owner, executing administrator, and business source.
+- AI search providers, system collection, global Embedding, knowledge chunking, and index configuration are restricted to super administrators; real-time vector queries for standard administrators use compatible personal or shared models and fall back to keyword retrieval when no compatible model is available.
+- Shared-model pages and APIs expose sanitized metadata only, while key access, configuration changes, connection tests, and deletion remain with the configuration owner; Shadow comparison reports, access-surface architecture gates, and a staged rollout runbook are included.
+- Manual enqueue and active-task updates validate both the operator and frozen execution identity. Shared models support concurrent calls while configuration mutations remain exclusive, the usage ledger writes immutable pre-call starts and reconciles missing outcomes, and historical backfill covers every asynchronous AI lifecycle.
+- Upgraded `league/commonmark` to 2.10.0 with compatible Nette dependency updates to address the latest Markdown parsing security advisories.
+
+#### Three-layer AI quality retrieval and governed atomic facts
+
+- Added atomic-first, chunk, and broad-knowledge retrieval modes. Task settings and standalone article editing now share readiness checks, default priority, inheritance, and override rules, with atomic-first selected when every source is ready.
+- Added readiness projections, serving generations, per-check source ledgers, and immutable execution snapshots. Checks retain requested and effective modes, strategy versions, source hashes, and audit data, while knowledge, model, prompt, article, and rollout changes selectively expire affected results and schedule reconciliation.
+- Completed governed atomic-fact generation, review, version publishing, stable keys, evidence relinking, typed comparison, and active-revision serving. Deterministic facts use the atomic path, while unsupported or ambiguous claims continue through chunk retrieval.
+- Hardened high-risk knowledge review, broad-evidence budgets, prompt-injection quarantine, cross-token API idempotency, concurrent policy-version checks, distribution guard snapshots, and deletion protection for referenced knowledge bases.
+- Expanded knowledge-base navigation, the atomic-fact workbench, AI model diagnostics, and six-language admin copy, with a legacy backfill command, Docker queue configuration, Laravel and JavaScript regressions, and benchmark reports.
+
+#### License and contribution governance
+
+- New GEOFlow versions and repository revisions from this change onward use the GNU Affero General Public License v3.0 only. Versions previously released under Apache-2.0 retain their original license.
+- Separate commercial terms are available from the copyright holder for proprietary modifications, white-label or OEM distribution, proprietary product integration, and other uses that cannot comply with AGPL-3.0.
+- Added a Contributor License Agreement, contribution guide, and pull request declaration. Contributors retain copyright while granting the project the sublicensing rights needed to use accepted contributions in both AGPL and commercial or proprietary versions.
+
+#### Product and experience updates
+
+- Added an end-to-end article AI quality optimization workflow. Administrators can target pass, 80-point excellent, or 90-point excellent results, then review iterative candidate edits, rescored outcomes, change history, apply, cancel, rollback, and reconciliation states.
+- Improved AI quality reliability and explainability across long-form inspection, evidence positioning, result validation, scoring, invalidation, dedicated queues, health checks, quota control, versioned prompts, and task-level optimization policy.
+- Unified confirmation dialogs for sensitive admin actions across articles, tasks, models, material libraries, and knowledge bases, with clear targets, impact summaries, input validation, pending states, and recovery guidance.
+- Refined Admin UI V3 with collapsible quality results, clearer page identity, and a shared footer on every admin page for the version, changelog, license, copyright, author X profile, GitHub repository, and help links, including short-page and mobile layouts.
+- Extended API v1 and the GEOFlow CLI with article AI optimization operations, and added Docker timeout, retry, health check, queue, and worker configuration for quality inspection and optimization workloads.
+
+#### Article, Update Center, and admin experience updates
+
+- Hardened article trash and data integrity:
+  - Permanent article deletion now retains view logs and safely nulls `view_logs.article_id`, with PostgreSQL online constraint replacement plus SQLite and other supported database paths.
+  - Batch permanent deletion now enforces a 500-article limit, sensitive-operation throttling, transactions, and row locks. Failures hide database details and roll back the entire batch.
+  - Author lists and the materials API now count trashed articles consistently and keep referenced authors protected.
+- Improved the System Update Center:
+  - New-version notices show the version, release type, release date, summary, and official GitHub Release destination.
+  - Stable update checks now read `version.json` from the latest published Release and follow only official GitHub release-asset redirects, so development versions on `main` no longer announce an update early.
+  - Release links stay within the official GEOFlow repository and are generated from validated tags, preventing remote metadata from redirecting administrators elsewhere.
+  - Manual knowledge sync steps now explain their purpose, current status, and copyable command. Super administrators can open the Update Center directly from the top-bar update icon.
+- Refined Admin UI V3 page identity:
+  - The top bar now carries concise page titles and semantic icons, while Analytics and the operations dashboard remove repeated headings and secondary actions.
+  - Analytics metrics now share consistent height, numeric alignment, and density. AI help carousel controls use tighter spacing.
+  - The welcome page now presents the GEOFlow 3.0 positioning, core capabilities, use cases, and four-step onboarding path.
+
+#### Core capabilities
+
+- Upgraded AI Workspace system knowledge and illustrated answers:
+  - Added an official admin guide with more than 10,000 Chinese characters across 15 sections, covering feature logic, design principles, workflows, highlights, troubleshooting, and trusted in-app destinations.
+  - The permanent system knowledge base now supports stable binding, official versions, health states, protected editing, revision restore, and idempotent synchronization. Application and database safeguards block deletion, while text fallback keeps help available during index failures.
+  - Help retrieval is restricted to system knowledge and supports multi-section evidence, short follow-up context, a 24,000-character turn budget, structured citations, and permission-filtered feature links.
+  - Added 24 sanitized WebP admin screenshots with private storage, hash verification, immutable replacement versions, gallery management, relevance selection, and fixed historical playback. Chinese answers can include up to three strongly related images.
+  - Added a fixed 72-question evaluation set, complete admin-route classification, knowledge and media manifest gates, and retention cleanup that preserves media referenced by live history.
+- Completed the Phase C independent updater cutover:
+  - The independent updater is now the sole execution boundary for website updates, full backups, and rollback. Legacy planning, file replacement, single-file restore, retry, and manual-failure actions have been removed.
+  - Legacy run and backup tables remain intact, with read-only audit views for the latest 90 days and older archived records.
+  - Website update, backup, and rollback requests require the administrator password and a six-digit authenticator code. The host updater persists consumed time steps under an exclusive lock to prevent replay.
+  - The legacy update queue container and Horizon supervisor have left runtime configuration. Compatibility tombstone jobs only mark old queued records as retired and perform no file, database, or container mutation.
+  - The global outbound response limit now has a neutral setting, legacy executor settings are removed, and the release checklist includes real-host amd64 and arm64 rehearsal gates.
+- Completed the Phase B independent updater integration:
+  - The System Update Center now provides safe update, full backup, environment verification, and one-click recovery-point rollback actions. Sensitive actions require a super administrator to confirm the current password.
+  - The page displays the durable operation ID, current stage, stage results, and recent recovery points. It refreshes while work is active and blocks concurrent submissions.
+  - The website starts operations through a fixed typed Unix-socket API that accepts no arbitrary commands or file paths.
+  - Before migrations or release activation, the updater backs up PostgreSQL, complete site storage, persistent Redis data, environment configuration, the version document, and managed deployment state. Protected-stage failures trigger restoration and verification.
+  - Recovery points record digest, size, mode, and ownership after writing and complete full verification before restoration. The newest five are retained by default.
+  - Interrupted operations use a durable recovery_required state and a cross-process lock for reconciliation. Both executors check the other execution path before administrator or queue mutations begin.
+  - Administrator passwords are excluded from audit payloads and failed-input flashing. Agent failures stay in server logs, and the application validates bounded Unix-socket response fields at the trust boundary.
+- Added the Phase A independent updater bridge:
+  - The System Update Center now shows GEOFlow Updater connection status and environment diagnostics, and can prepare and privately download a signed installer.
+  - Installer preparation verifies the embedded two-of-three offline root, targets-role signature, platform, size, and SHA-256. Downloads use the shared safe outbound gateway.
+  - Private installer state retains the signed expiry and revalidates file type, path, size, and digest on download. Symlinks, expired state, and modified files are rejected.
+  - The website reads updater status through an instance-authenticated local Unix socket and does not mount the Docker socket.
+  - Initial managed handover loads both site and signed-release environment files, stops the standard production project before attaching its database directory, and calls out queue draining and the maintenance window.
+  - Phase A establishes the installer, trust, and connection foundation used by Phase B transactional operations.
+
+- Added the article AI quality inspection workflow:
+  - Task creation and editing include an AI quality switch that defaults to disabled, with selectable inspection plan, model, auto-pass score, and manual-approval floor.
+  - Each covered article runs an asynchronous inspection against task knowledge, versioned advertising rules, and publishing context. Fixed backend rules calculate the total and four dimension scores.
+  - Passed results continue through the existing review and publishing schedule. Reviewable, blocked, failed, and outdated results remain drafts and cannot enter local publishing, hosted allocation, Manual Publication, or channel distribution.
+  - Article lists and detail pages expose status, score, conclusion, severity colors, source positioning, evidence, legal references, suggestions, history, recheck, and audited manual approval.
+  - Changes to article content, task policy, prompts, models, knowledge chunks, or the legal rule version expire prior results and schedule reconciliation.
+  - Long articles continue through one queued segment at a time. Structured requests and JSON fallback share one per-model time budget, while reconciliation isolates per-article configuration failures and dispatches cursor-based continuation batches.
+  - Inspections now have a 180-second end-to-end deadline, dedicated online and backfill queues, timeout sampling fallback, typed provider failures, and worker health checks. Failed runs remain unscored and provide actionable retry guidance.
+  - Added a guarded `fast_v2` compact execution path, stable evidence keys, shadow evaluation for scoring v2, offline and live golden-set commands, and staged release gates with incident freezes and verified recovery reports.
+- Unified Admin UI V3:
+  - Core admin pages now share the new sidebar, top bar, navigation, forms, dialogs, and responsive layout, with recent activity, adjustable sidebar width, keyboard support, mobile layouts, and accessible states.
+  - Icons, fonts, and page resources load locally. First paint and page navigation checks reduce flicker, layout shifts, and external resource dependencies.
+- Changed the AI Workspace boundary:
+  - The 3.0 AI Workspace is an admin help assistant that uses a local help catalog, current administrator permissions, and one chat model call to answer product questions, with real SSE connection states and streamed content.
+  - Feature links are generated server-side from named routes and permissions. Model output cannot create clickable destinations, and model probes expose clear streaming readiness, plain-text fallback, timeout, and failover states.
+  - The legacy Run, Plan, Approval, Capability, and Trace workflow no longer accepts new requests. Existing conversations, run records, and audit data remain available.
+- Added the hosted channel site lifecycle:
+  - Allocate subdomains under a hosted root domain, manage site lifecycle and article assignments, enforce publishing quotas and intervals, and track paused, maintenance, archived, indexing, and failure cooldown states.
+  - Technical preflight, cache invalidation, reconciliation, and recovery commands cover primary hosts, hosted roots, reserved labels, trusted proxies, three-entry Nginx routing, wildcard DNS, and wildcard TLS boundaries.
+  - Hosted sites remain disabled until the network, certificate, and reverse proxy configuration is ready.
+- Connected Manual Publication, the Chrome operations assistant, and PWA support:
+  - The Chrome extension uses a short-lived device code for administrator approval and receives only browser operation read and execute scopes. It supports claims, heartbeats, recovery, account checks, receipts, and token revocation.
+  - The first adapter fills plain-text answer drafts on Zhihu question pages for user review and final submission. Generic mode continues to open target pages, copy content, and record manual results.
+  - The admin can be installed as a PWA with local icons, a web app manifest, a service worker, update prompts, and a standalone window.
+- Improved task, model, and Manual Publication workflows:
+  - Task save, activation, and queue execution now check title library capacity, loop policy, and protected-task conflicts, then provide actionable replenishment guidance and management links.
+  - AI model forms now use reusable pages, while connection probes record real streaming capability and plain-text fallback. The default article output limit increases to 16K tokens.
+  - Manual Publication adds browser payloads, claim leases, execution evidence, outcome review states, and stricter account and target URL validation.
+  - Title libraries support queued AI generation of up to 100,000 titles with progress recovery, cancellation, retries, and stable deduplication. Deleted tasks enter a 90-day audited trash, and article lists can export selected content as a Markdown ZIP.
+  - The v2.3 Manual Publication identity snapshot, complete transition history, lock-scoped assignee reauthorization, full 90-day exact duplicate checks, and searchable paginated article picker remain intact for both upgraded and fresh databases.
+- Expanded API v1 and the GEOFlow CLI:
+  - `bin/geoflow` 0.2.0 covers catalogs, tasks, runs, materials, and articles with secure configuration, login, JSON file or stdin input, deletion confirmation, and structured errors.
+  - API v1 adds browser device authorization, session, and Manual Publication protocols while preserving authorization, idempotency, version negotiation, and error contracts.
+- Clarified installation, upgrade, and deployment boundaries:
+  - Fresh installations create only required data and do not import demo articles automatically. Existing sites retain their themes, settings, categories, articles, and business data.
+  - Before upgrading, back up the database, `.env`, uploads, and `storage`, drain old processes, then run migrations, rebuild frontend assets, and restart runtime processes. Docker startup uses `--remove-orphans` to remove services that have left the current Compose definition.
+  - Upgrades from early 2.x versions must still complete managed image readiness and `geoflow:security-audit`. Chrome operations deployments must update the extension as well.
+  - The public `/archive` and monthly archive URLs continue to serve content lists and theme templates, preserving links and indexing semantics published in v2.3.
+  - An empty anonymous telemetry endpoint sends no browser activity request. Operators must explicitly enable telemetry and configure an HTTPS collector endpoint.
+- Component compatibility and release gates:
+  - GEOFlow is `3.0.0`, the bundled CLI is `0.2.0`, and the Chrome operations assistant is `0.1.0`.
+  - The independent updater must use a signed release authorization bound to the final GEOFlow `3.0.0` commit and app/web image digests. The release gate requires real amd64 and arm64 host rehearsals, with the exact compatible updater version recorded in the GitHub Release.
+  - The published Release includes the Core ZIP, its SHA-256 file, and a standalone `version.json` asset, followed by a readback of the Latest metadata version and tag.
+
+## 2026-08-09
+
+### v2.3.0
+
+- Added the `geoflow-template-21-enterprise-signature` frontend theme:
+  - Includes home, category, article, About, archive, and pagination templates, with dedicated CSS, JavaScript, design tokens, module mappings, and preview notes.
+  - The homepage supports value proposition, capability, case study, content, and lead form modules. It shows a demo form when no valid form is selected and uses the live submission flow after selection.
+  - Preview coverage includes 1280 px desktop and 375 px and 320 px mobile layouts. The theme is published and becomes the default after a fresh installation completes.
+- Added the versioned `frontend-reference-v1` website content pack:
+  - Ships 50 Markdown documents with shared JSON metadata, organized into 35 Feature Guide articles and 15 Deployment & Operations articles.
+  - `geoflow:install` imports the pack and activates theme 21 on a pristine database. `--without-demo` remains available for a minimal first install.
+  - Sites with an installation marker or business data skip the import and retain their active theme, settings, authors, categories, and articles.
+- Added a standalone Admin UI V2 prototype:
+  - Includes 84 page states across eight groups covering the workspace, content, materials, distribution, analytics, site, AI configuration, and system management.
+  - Uses read-only demonstration data isolated from production APIs, with build scripts, a page manifest, a component gallery, and automated verification.
+- Added the Manual Publication workspace:
+  - Creates post tasks from approved articles and comment tasks for public target URLs, with identity, platform account, assignee, schedule, risk, and duplicate-warning fields.
+  - Supports ready, in-progress, completed, failed, skipped, and cancelled transitions, with stable identity and account snapshots, complete status history, completion URLs and notes, filtering, summaries, and CSV exports.
+  - The article picker provides server-side search and pagination while retaining the article linked to the current task. Exact-content, target-URL, and source-article duplicate checks cover the complete 90-day window.
+  - State transitions reauthorize the current assignee inside the database lock, preventing a former assignee from acting after a concurrent reassignment.
+  - Standard administrators can only work with assigned tasks. The workspace stores no external platform passwords, cookies, tokens, or OAuth credentials.
+- Updated AI model and outbound request runtimes:
+  - Official OpenAI chat models use the Responses API, third-party OpenAI-compatible services use the compatible driver, and new Gemini parameters and Atlas Cloud presets are included.
+  - Model connection tests count toward quota and usage audit records, upstream errors redact keys and tokens before display, and DNS resolution avoids repeated lookups when addresses are already available.
+- Expanded integration across articles, lead forms, distribution, site settings, and admin navigation, with additional coverage for themes, Manual Publication, AI runtimes, authorization, and outbound security.
+
+## 2026-07-29
+
+### v2.2.0
+
+- Added anonymous successful-login telemetry:
+  - Successful admin web and API logins emit `admin_login` events with the channel, current version, random installation ID, and an irreversible admin digest.
+  - Every successful event carries a unique UUID for deduplication, allowing the central collector to aggregate login counts and anonymous admin activity accurately.
+  - A fixed payload allowlist excludes usernames, email addresses, IP addresses, domains, page paths, failed-login details, content, and secrets.
+- Preserved login availability:
+  - Telemetry runs after the response, so collector timeouts or failures do not change web or API login outcomes.
+  - Failed logins, disabled telemetry, and missing collector endpoints send no central request.
+- Expanded automated coverage for anonymous payloads, web/API channels, silent failed logins, and telemetry network failures.
+
+## 2026-07-28
+
+### v2.1.2
+
+- Refreshed the frontend dependency security baseline:
+  - Updated compatible patch releases for Axios, Vite, esbuild, PostCSS, concurrently, shell-quote, Pusher JS, and related packages.
+  - Removed the legacy `engine.io-client` / `ws` dependency chain, restoring production and development npm audits to zero known vulnerabilities.
+- Corrected anonymous telemetry metric boundaries:
+  - Server-side install, update, and daily heartbeat events exclusively drive deployment totals, active deployments, and version distribution.
+  - Browser `admin_active` Pulse events now contribute only to admin DAU and no longer inflate deployment metrics.
+  - Cloudflare D1 deduplicates lifecycle versions, daily heartbeats, and daily admin digests so network retries do not multiply raw events.
+- Normalized the PHP formatting baseline so the full Pint check passes.
+
+## 2026-07-17
+
+### v2.1.1 (release preparation)
+
+- Added lightweight anonymous deployment telemetry:
+  - First install sends `installed`, version changes send `updated`, and the scheduler sends at most one daily `heartbeat` for discovered-deployment, active-deployment, and version-distribution metrics.
+  - The browser `admin_active` Pulse remains in place and measures admin DAU by random instance ID plus an irreversible admin digest.
+  - Events use a Cloudflare Pages Functions HTTPS gateway backed by D1 by default; operators can replace the endpoint or disable telemetry completely.
+  - Server payloads contain only event type, random instance ID, and version. Network failures do not change install, update, or scheduler outcomes, and telemetry can be disabled with `GEOFLOW_TELEMETRY_ENABLED=false`.
+- Hardened frontend structured data:
+  - Every theme now emits JSON-LD through Laravel `Js::encode`, blocking executable-context payloads such as `</script>` while preserving valid Schema data.
+- Tightened managed image and API idempotency boundaries:
+  - Image uploads now use content-addressed names and managed-root validation. The new `images.managed_path_hash` identity and `managed_image_paths` registry track state and fencing data to prevent external-path, symlink, and concurrent-deletion escapes.
+  - API idempotency records now carry durable state, owner leases, and a fingerprint version. Legacy and expired `in_progress` records enter explicit manual-recovery paths.
+  - Physical image deletion stays disabled by default. Upgrades must drain old processes, confirm the migration, complete the `managed_path_hash` backfill, and pass readiness checks before enabling deletion.
+- Unified outbound request security and sensitive admin authorization:
+  - Distribution, URL import, theme reference fetching, AI, update metadata, and archive downloads now use the safe outbound gateway with URL normalization, complete DNS-candidate validation, IP pinning, redirect controls, response limits, and redacted errors, closing SSRF bypass paths.
+  - Sensitive Distribution, URL Import, theme, and replication management routes now require super-admin authorization.
+- Isolated generated theme code:
+  - Live theme editing routes and UI that wrote Blade or CSS are disabled. Theme replication preview uses a trusted deterministic page, never compiles generated Blade, and applies a sandbox CSP that blocks scripts and external resources.
+  - Theme replication publication is package-only and no longer writes generated files into live theme directories.
+- Added a read-only security audit:
+  - `php artisan geoflow:security-audit` emits a human-readable report, while `--json` emits a stable schema. Any finding or incomplete audit returns exit code `1`.
+  - Checks cover security migrations, the managed image registry, deletion gates, API idempotency state, legacy image path input, and private outbound exceptions without HTTP, DNS, or repair operations.
+- Updated the dependency security baseline:
+  - Upgraded Laravel, Guzzle, PSR-7, and Symfony security patches; the lock file has no known advisories in the dependency audit.
+  - The minimum PHP version is now consistently 8.3 to match the current `laravel/ai` requirement; Docker continues to default to PHP 8.4.
+
+## 2026-06-26
+
+### v2.1.0
+
+- Added the Enterprise Knowledge drafting workflow:
+  - The admin now includes an Enterprise Knowledge entry for creating projects, uploading or pasting multiple source files, reviewing parsed sources, generating AI drafts, and viewing revision history.
+  - Added project, source, and revision tables plus a queued generation job, so long drafting runs can execute in the background instead of blocking the admin page.
+  - Source parsing covers common formats including text, Markdown, HTML, CSV, JSON, XML, PDF, Word, and Excel, with each source kept traceable.
+  - AI cleanup and structured organization now prioritize source coverage. Long inputs are processed by module, and missing source facts are backfilled into the relevant sections to reduce over-simplification.
+  - Draft output keeps modules, audience, content format, manual-review notes, and source summaries for later review and publishing.
+- Improved knowledge-base and material management:
+  - Knowledge-base detail pages now include a Markdown editor for viewing and adjusting knowledge content directly in the admin.
+  - Knowledge-base detail pages can resubmit semantic chunking and safely return to the detail page after the action.
+  - The materials page now links into the Enterprise Knowledge builder, making standard knowledge bases, material libraries, and Enterprise Knowledge drafts easier to connect.
+- Expanded themes, templates, and frontend output:
+  - Added live theme-template editing from the admin, with test coverage for the editing flow. Live theme editing is disabled in v2.1.1; the current security flow uses isolated previews and package-only review archives.
+  - Site settings now support homepage module configuration and custom styling, and target-site packages can sync richer homepage structures.
+  - Added the APIHot recommendation frontend theme with home, category, archive, article pages, and bundled assets.
+  - Unified frontend SEO metadata output so themes share the same SEO head logic and avoid inconsistent titles, Open Graph data, and structured data.
+- Improved Distribution Management and target-site synchronization:
+  - Tasks now include distribution strategies for local, channel-only, and local-plus-channel publishing.
+  - Article lists show clearer distribution status, remote-copy links, sync state, and failure information.
+  - Distribution Management can sync target-site settings for selected active GEOFlow Agent channels.
+  - Target-site packages now follow the same SEO metadata contract as local frontend pages.
+- Improved deployment and runtime stability:
+  - Added install-state tracking and default-data seed guards so existing deployments are not polluted by repeated demo data after restarts, migrations, or upgrades.
+  - Default-admin initialization now supports email configuration, with additional production entrypoint, Redis session, Docker image, network, permissions, and reverse-proxy improvements.
+  - Admin paths and Reverb auth paths now support subdirectory deployments, reducing asset and WebSocket issues when `APP_URL` includes a path prefix.
+- Expanded test coverage:
+  - Added tests for Enterprise Knowledge, theme editing, site settings, distribution strategies, target-site sync, SEO metadata, install guards, and deployment configuration.
+  - Full release verification passed with `479 passed` and `3179 assertions`.
+
+## 2026-06-02
+
+### v2.0.4
+
+- Fixed stale admin versions after code updates in deployed environments: the admin version now defaults to local `version.json`, and environment examples no longer write `GEOFLOW_APP_VERSION`.
+- Reworked Docker first-install behavior: added `php artisan geoflow:install` and a system installation marker, so default install seeders only run on an empty database; existing deployments are marked as installed without re-seeding default categories, articles, site settings, ads, or prompts.
+- Updated the admin version to `2.0.4`, including `version.json` and default admin version display values.
+
+### v2.0.3
+
+- Added the System Update Center:
+  - The admin notification area now links to a dedicated System Update Center with current version, latest GitHub version, repository links, changelog links, and last-check time.
+  - GitHub `version.json` metadata is used to detect and display newer versions in the admin.
+- Added update planning, preflight checks, and manual command previews:
+  - Admins can generate update plans from remote release archives and review added, modified, deleted, migration, dependency, and manual-step changes.
+  - Preflight checks cover repository trust, archive size, file paths, disk space, worktree state, backup state, and execution switches.
+  - The admin shows copyable manual command lists and does not execute host shell commands by default.
+- Added backup and rollback flow:
+  - Files scheduled for replacement are backed up before update, with manifest, source version, target version, file count, and backup path recorded.
+  - Supports single-file restore, full rollback, rollback preflight checks, and a keep-last-10 backup policy.
+  - Rollback execution is protected by environment switches and super-admin password checks by default.
+- Added queued update execution and recovery:
+  - Updates and rollbacks run through the background queue with stages, timeline entries, logs, verification commands, and failure reasons.
+  - Includes status polling, stale-run warnings, failed-run retry, and manual failure marking.
+  - File verification before apply reduces partial replacement and concurrent update risks.
+- Added deployment diagnostics and self-recovery guidance:
+  - System Update Center now checks APP_URL, APP_KEY, database connectivity, migrations table, and writable `storage/app` / `bootstrap/cache` paths.
+  - Shows runtime configuration, Laravel log summaries, and deployment-mode-specific command guidance.
+  - Added Ubuntu 24.04 LTS + Docker production troubleshooting docs for initialization commands, `.env.prod` checks, container logs, and 500 errors.
+- Updated the admin version to `2.0.3`, including `version.json` and default admin version display values.
+
+## 2026-05-30
+
+### Distribution Management
+
+- Added Generic HTTP API distribution channels:
+  - Supports no auth, Bearer Token, Basic Auth, custom Header Key, and HMAC signatures.
+  - Supports per-action HTTP methods and paths for health checks, publish, update, delete, and site-settings sync.
+  - Supports `remote_id` / `remote_url` response mapping, success-status configuration, payload wrapping, and request timeout settings.
+  - Generic API channels reuse the existing distribution queue, retries, logs, remote article edit/delete actions, and site-settings sync flow.
+- Distribution channel detail pages now show Generic API onboarding, response-mapping summaries, and a sample payload for third-party receivers.
+- README and localized READMEs now describe the Generic HTTP API channel capability.
+
+## 2026-05-28
+
+### v2.0.2
+
+- Upgraded the admin dashboard into a GEOFlow automation workflow panel:
+  - Shows how APIs, material libraries, tasks, articles, distribution, Analytics, and site settings connect in the automated production flow.
+  - Keeps the three-step setup guide and companion Skill shortcuts while removing duplicated dashboard metric cards.
+- Improved Analytics data accuracy:
+  - Total views, viewed content, top content, and log analytics now prefer `view_logs` event data and filter out non-GET requests.
+  - Publishing trends use actual `published_at` timestamps, and distribution metrics respect task/category filters through related articles.
+  - AI crawler, search bot, other automation, and human traffic classification now share one rule set to reduce misclassification.
+- Improved local Docker development behavior:
+  - The development image disables CLI OPcache so mounted code updates are reflected without stale admin pages.
+- Updated the admin version to `2.0.2`, including `version.json`, environment examples, and default admin version display values.
+
 ## 2026-05-24
 
 ### AI Models and Knowledge Bases
@@ -114,9 +581,9 @@ This document tracks user-facing updates in the public repository. For future Gi
   - Application code reads `config('geoflow.url_import_allow_mixed_dns')`, so it is compatible with Laravel config caching
 - Added coverage for model driver resolution and URL normalization.
 - Fixed default admin initialization for production Docker first-time deployment:
-  - `docker/entrypoint.prod.sh` now supports `AUTO_SEED`
-  - `docker-compose.prod.yml` enables seeding only for the one-shot `init` service
-  - The default admin account is created after first-time migrations, and repeated runs do not overwrite an existing `admin` user
+  - The one-shot `init` service runs `geoflow:install` after migrations
+  - The default admin account is created only for an empty first install; existing deployments are marked as initialized
+  - Long-running services do not receive initialization environment variables, so restarts do not repeat install seeders
 
 ## 2026-05-08
 

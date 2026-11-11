@@ -1,8 +1,8 @@
 {
   "id": "toutiao-news-20260426",
-  "name": "Toutiao News Inspired",
+  "name": "头条新闻风格",
   "version": "1.0.0",
-  "description": "A Toutiao-inspired GEOFlow frontend theme with a channel rail, news feed, compact cards, and right-side hot list.",
+  "description": "参考今日头条的 GEOFlow 前端主题，包含频道栏、新闻信息流、紧凑卡片与右侧热点榜。",
   "templates": [
     "layout",
     "home",
@@ -13,5 +13,29 @@
   "notes": [
     "Inspired by modern news portal layout patterns. Does not copy Toutiao assets, content, or proprietary code.",
     "Keeps GEOFlow Blade variables, SEO meta fields, markdown HTML rendering, category navigation, footer, and article routes intact."
-  ]
+  ],
+    "topic": {
+        "contract": 1,
+        "layouts": [
+            {
+                "id": "default",
+                "name": "标准聚合",
+                "view": "site.topics.templates.default"
+            },
+            {
+                "id": "guide",
+                "name": "阅读指南",
+                "view": "site.topics.templates.guide"
+            },
+            {
+                "id": "roundup",
+                "name": "资讯盘点",
+                "view": "site.topics.templates.roundup"
+            }
+        ],
+        "homepage_module": {
+            "view": "site.partials.topic-home",
+            "enabled": true
+        }
+    }
 }

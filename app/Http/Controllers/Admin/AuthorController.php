@@ -5,10 +5,12 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Article;
 use App\Models\Author;
+use App\Models\Task;
 use App\Support\AdminWeb;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\View\View;
 
 /**
@@ -160,12 +162,21 @@ class AuthorController extends Controller
     {
         $author = Author::query()->whereKey($authorId)->firstOrFail();
 
+        $taskQuery = Task::withTrashed()->where('author_id', $authorId);
+        if (Schema::hasColumn('tasks', 'custom_author_id')) {
+            $taskQuery->orWhere('custom_author_id', $authorId);
+        }
+        $taskCount = $taskQuery->count();
+        if ($taskCount > 0) {
+            return back()->withErrors(__('admin.authors.error.delete_tasks', ['count' => $taskCount]));
+        }
+
         $visibleCount = Article::query()->where('author_id', $authorId)->whereNull('deleted_at')->count();
         if ($visibleCount > 0) {
             return back()->withErrors(__('admin.authors.error.delete_visible', ['count' => $visibleCount]));
         }
 
-        $trashedCount = Article::query()->where('author_id', $authorId)->whereNotNull('deleted_at')->count();
+        $trashedCount = Article::onlyTrashed()->where('author_id', $authorId)->count();
         if ($trashedCount > 0) {
             return back()->withErrors(__('admin.authors.error.delete_trashed', ['count' => $trashedCount]));
         }
@@ -197,7 +208,7 @@ class AuthorController extends Controller
         $query->withCount([
             'articles as article_count' => fn ($builder) => $builder->whereNull('deleted_at'),
             'articles as published_count' => fn ($builder) => $builder->where('status', 'published')->whereNull('deleted_at'),
-            'articles as trashed_count' => fn ($builder) => $builder->whereNotNull('deleted_at'),
+            'articles as trashed_count' => fn ($builder) => $builder->onlyTrashed(),
         ]);
 
         return $query->paginate(self::INDEX_PER_PAGE)->withQueryString()->through(static function (Author $author): array {

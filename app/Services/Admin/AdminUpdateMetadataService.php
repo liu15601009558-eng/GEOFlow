@@ -2,18 +2,34 @@
 
 namespace App\Services\Admin;
 
+use App\Services\Outbound\SafeOutboundHttpClient;
+use Illuminate\Http\Client\Factory;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Http;
 
 /**
  * Checks upstream GEOFlow release metadata for admin update notifications.
  */
 class AdminUpdateMetadataService
 {
+    private const GITHUB_REPOSITORY_URL = 'https://github.com/yaojingang/GEOFlow';
+
+    private const OFFICIAL_RELEASE_METADATA_URL = self::GITHUB_REPOSITORY_URL.'/releases/latest/download/version.json';
+
+    public function __construct(
+        private readonly SafeOutboundHttpClient $safeHttp,
+        private readonly Factory $http,
+    ) {}
+
     /**
      * @return array{
      *   current_version: string,
      *   latest_version: string,
+     *   latest_commit?: string,
+     *   tag?: string,
+     *   archive_url?: string,
+     *   archive_sha256?: string,
+     *   release_date?: string,
+     *   release_type?: string,
      *   payload: array<string, mixed>,
      *   is_update_available: bool,
      *   is_ignored: bool,
@@ -76,6 +92,12 @@ class AdminUpdateMetadataService
         return [
             'current_version' => $currentVersion,
             'latest_version' => $latest,
+            'latest_commit' => trim((string) ($json['commit'] ?? '')),
+            'tag' => trim((string) ($json['tag'] ?? '')),
+            'archive_url' => trim((string) ($json['archive_url'] ?? '')),
+            'archive_sha256' => trim((string) ($json['archive_sha256'] ?? '')),
+            'release_date' => trim((string) ($json['release_date'] ?? '')),
+            'release_type' => trim((string) ($json['release_type'] ?? '')),
             'payload' => $payload,
             'is_update_available' => $isUpdateAvailable,
             'is_ignored' => ! $isUpdateAvailable,
@@ -96,19 +118,20 @@ class AdminUpdateMetadataService
         return [
             'state' => $state,
             'links' => [
-                'github' => 'https://github.com/yaojingang/GEOFlow',
+                'github' => self::GITHUB_REPOSITORY_URL,
                 'changelog' => [
-                    'zh-CN' => (string) ($payload['changelog_url_zh'] ?? 'https://github.com/yaojingang/GEOFlow/blob/main/docs/CHANGELOG.md'),
-                    'en' => (string) ($payload['changelog_url_en'] ?? 'https://github.com/yaojingang/GEOFlow/blob/main/docs/CHANGELOG_en.md'),
+                    'zh-CN' => $this->changelogUrl($state, 'docs/CHANGELOG.md'),
+                    'en' => $this->changelogUrl($state, 'docs/CHANGELOG_en.md'),
                 ],
-                'release' => (string) ($payload['release_url'] ?? 'https://github.com/yaojingang/GEOFlow'),
+                'release' => $this->releaseUrl($state),
             ],
+            'release_notice' => $this->releaseNotice($state, $payload),
         ];
     }
 
     public function currentVersion(): string
     {
-        return trim((string) config('geoflow.app_version', '2.0'));
+        return trim((string) config('geoflow.app_version', '0.0.0-dev'));
     }
 
     public function metadataUrl(): string
@@ -121,19 +144,37 @@ class AdminUpdateMetadataService
         return (bool) config('geoflow.update_check_enabled', true) && $this->metadataUrl() !== '';
     }
 
+    public function forgetCachedMetadata(): void
+    {
+        $url = $this->metadataUrl();
+        if ($url === '') {
+            return;
+        }
+
+        Cache::forget($this->cacheKey($url));
+    }
+
     /**
      * @return array{status: string, json?: array<string, mixed>, checked_at: string}
      */
     private function fetchRemoteMetadata(string $url): array
     {
-        $cacheKey = 'geoflow:update_metadata:'.sha1($url);
         $ttl = max(60, (int) config('geoflow.update_metadata_cache_ttl_seconds', 86400));
 
-        return Cache::remember($cacheKey, $ttl, function () use ($url): array {
+        return Cache::remember($this->cacheKey($url), $ttl, function () use ($url): array {
             $checkedAt = now()->toDateTimeString();
+            $officialReleaseSource = $url === self::OFFICIAL_RELEASE_METADATA_URL;
 
             try {
-                $response = Http::timeout(5)->acceptJson()->get($url);
+                $request = $this->http->timeout(5)->connectTimeout(3)->acceptJson();
+                $response = $this->safeHttp->get(
+                    $request,
+                    $url,
+                    (int) config('geoflow.outbound_metadata_max_bytes', 1024 * 1024),
+                    $officialReleaseSource ? 2 : 0,
+                    [],
+                    $officialReleaseSource ? $this->validateOfficialReleaseRedirect(...) : null,
+                );
             } catch (\Throwable) {
                 return [
                     'status' => 'error',
@@ -162,5 +203,104 @@ class AdminUpdateMetadataService
                 'checked_at' => $checkedAt,
             ];
         });
+    }
+
+    private function cacheKey(string $url): string
+    {
+        return 'geoflow:update_metadata:'.sha1($url);
+    }
+
+    private function validateOfficialReleaseRedirect(string $url): void
+    {
+        $parts = parse_url($url);
+        $host = strtolower((string) ($parts['host'] ?? ''));
+        $port = (int) ($parts['port'] ?? 443);
+        if (($parts['scheme'] ?? null) !== 'https'
+            || $port !== 443
+            || isset($parts['user'])
+            || isset($parts['pass'])
+            || ! in_array($host, [
+                'github.com',
+                'objects.githubusercontent.com',
+                'release-assets.githubusercontent.com',
+            ], true)) {
+            throw new \RuntimeException('Release metadata redirect left the official GitHub release service.');
+        }
+    }
+
+    /** @param array<string, mixed> $state */
+    private function releaseUrl(array $state): string
+    {
+        $tag = $this->validatedTag($state);
+        if ($tag !== null) {
+            return self::GITHUB_REPOSITORY_URL.'/releases/tag/'.rawurlencode($tag);
+        }
+
+        return self::GITHUB_REPOSITORY_URL.'/releases';
+    }
+
+    /** @param array<string, mixed> $state */
+    private function changelogUrl(array $state, string $path): string
+    {
+        $reference = $this->validatedTag($state) ?? 'main';
+
+        return self::GITHUB_REPOSITORY_URL.'/blob/'.rawurlencode($reference).'/'.$path;
+    }
+
+    /** @param array<string, mixed> $state */
+    private function validatedTag(array $state): ?string
+    {
+        $tag = trim((string) ($state['tag'] ?? ''));
+
+        return preg_match('/\Av?[0-9A-Za-z][0-9A-Za-z._-]{0,127}\z/D', $tag) === 1
+            ? $tag
+            : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $state
+     * @param  array<string, mixed>  $payload
+     * @return array{
+     *   available: bool,
+     *   current_version: string,
+     *   latest_version: string,
+     *   release_date: string,
+     *   release_type: string,
+     *   summary: string,
+     *   url: string
+     * }
+     */
+    private function releaseNotice(array $state, array $payload): array
+    {
+        $locale = app()->getLocale();
+        $summaryKeys = array_values(array_unique(array_filter([
+            'summary_'.$locale,
+            $locale === 'zh_CN' ? 'summary_zh' : null,
+            'summary_en',
+        ])));
+        $summary = '';
+
+        foreach ($summaryKeys as $summaryKey) {
+            $candidate = trim((string) ($payload[$summaryKey] ?? ''));
+            if ($candidate !== '') {
+                $summary = $candidate;
+                break;
+            }
+        }
+
+        $releaseType = trim((string) ($state['release_type'] ?? ''));
+        if (! in_array($releaseType, ['major', 'minor', 'patch', 'feature', 'fix', 'security'], true)) {
+            $releaseType = '';
+        }
+
+        return [
+            'available' => ! empty($state['is_update_available']),
+            'current_version' => ltrim(trim((string) ($state['current_version'] ?? '')), 'vV'),
+            'latest_version' => ltrim(trim((string) ($state['latest_version'] ?? '')), 'vV'),
+            'release_date' => trim((string) ($state['release_date'] ?? '')),
+            'release_type' => $releaseType,
+            'summary' => $summary,
+            'url' => $this->releaseUrl($state),
+        ];
     }
 }

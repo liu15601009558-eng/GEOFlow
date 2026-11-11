@@ -2,7 +2,7 @@
     <div class="px-6 py-8 text-sm text-gray-500">{{ __('admin.distribution.empty_jobs') }}</div>
 @else
     <div class="overflow-x-auto">
-        <table class="min-w-full divide-y divide-gray-200">
+        <table class="min-w-full divide-y divide-gray-200" data-sticky-actions aria-label="{{ __('admin.distribution.jobs_title') }}">
             <thead class="bg-gray-50">
                 <tr>
                     <th class="px-6 py-3 text-left text-xs font-medium uppercase text-gray-500">{{ __('admin.distribution.field.article') }}</th>
@@ -22,12 +22,14 @@
                         'sending' => 'bg-amber-100 text-amber-800',
                         'synced' => 'bg-green-100 text-green-800',
                         'failed' => 'bg-red-100 text-red-800',
+                        'outcome_unknown' => 'bg-purple-100 text-purple-800',
                     ])
                     @php($jobActionKey = 'admin.distribution.action.'.(string) $job->action)
                     @php($jobActionLabel = trans()->has($jobActionKey) ? __($jobActionKey) : (string) $job->action)
                     @php($jobStatusKey = 'admin.distribution.job_status.'.(string) $job->status)
                     @php($jobStatusLabel = trans()->has($jobStatusKey) ? __($jobStatusKey) : (string) $job->status)
                     @php($isDeletedRemoteCopy = (string) $job->action === 'delete' && (string) $job->status === 'synced')
+                    @php($isOutcomeUnknown = (string) $job->status === 'outcome_unknown')
                     <tr>
                         <td class="min-w-[28rem] max-w-[42rem] break-words px-6 py-4 text-sm font-medium text-gray-900">{{ $job->article?->title ?? __('admin.common.none') }}</td>
                         <td class="whitespace-nowrap px-4 py-4 text-sm text-gray-600">{{ $job->channel?->name ?? __('admin.common.none') }}</td>
@@ -46,16 +48,20 @@
                         <td class="whitespace-nowrap px-4 py-4 text-sm text-gray-600">{{ $job->last_error_message ?: __('admin.common.none') }}</td>
                         <td class="whitespace-nowrap px-4 py-4 text-sm text-gray-600" data-distribution-delete-status>
                             <div class="flex flex-nowrap items-center gap-3">
-                            @if ($isDeletedRemoteCopy)
+                            @if ($isOutcomeUnknown)
+                                <span class="text-purple-700">{{ __('admin.distribution.job_state.manual_reconciliation_required') }}</span>
+                            @elseif ($isDeletedRemoteCopy)
                                 <span class="text-gray-400">{{ __('admin.distribution.job_state.remote_copy_deleted') }}</span>
-                            @elseif ($job->article)
+                            @elseif ($job->article && ! $job->channel?->isPlatformWeb())
                                 <a href="{{ route('admin.distribution.article.edit', ['distributionId' => (int) $job->id]) }}" class="text-blue-600 hover:text-blue-800">{{ __('admin.distribution.button.edit_remote_article') }}</a>
-                                <form method="POST" action="{{ route('admin.distribution.article.delete', ['distributionId' => (int) $job->id], false) }}" data-distribution-delete-form data-confirm-message="{{ __('admin.articles.confirm.delete_title') }}" data-deleting-label="{{ __('admin.distribution.job_state.remote_copy_deleting') }}" data-deleted-label="{{ __('admin.distribution.job_state.remote_copy_deleted') }}">
+                                <form method="POST" action="{{ route('admin.distribution.article.delete', ['distributionId' => (int) $job->id], false) }}" data-distribution-delete-form data-confirm-message="{{ __('admin.articles.confirm.delete_title') }}" data-deleting-label="{{ __('admin.distribution.job_state.remote_copy_deleting') }}" data-deleted-label="{{ __('admin.distribution.job_state.remote_copy_deleted') }}" data-failed-template="{{ __('admin.distribution.message.remote_article_delete_failed', ['message' => '__MESSAGE__']) }}">
                                     @csrf
                                     <button type="submit" class="text-red-600 hover:text-red-800">{{ __('admin.distribution.button.delete_remote_article') }}</button>
                                 </form>
                             @endif
-                            @if ($job->status === 'failed')
+                            @if ($job->channel?->isPlatformWeb() && $job->remote_id && in_array($job->status, ['failed', 'outcome_unknown'], true))
+                                <a href="{{ route('admin.manual-publications.show', ['manualPublicationId' => (int) $job->remote_id]) }}" class="text-blue-600 hover:text-blue-800">人工核实与重试</a>
+                            @elseif ($job->status === 'failed')
                                 <form method="POST" action="{{ route('admin.distribution.retry', ['distributionId' => (int) $job->id]) }}">
                                     @csrf
                                     <button type="submit" class="text-blue-600 hover:text-blue-800">{{ __('admin.distribution.button.retry') }}</button>
@@ -88,7 +94,14 @@
                 event.preventDefault();
 
                 const confirmMessage = form.dataset.confirmMessage || '';
-                if (confirmMessage && ! window.confirm(confirmMessage)) return;
+                const confirmed = await window.AdminActionDialog?.confirm?.({
+                    title: confirmMessage,
+                    message: @js(__('admin.action_dialog.generic_impact')),
+                    tone: 'danger',
+                    confirmLabel: @js(__('admin.distribution.button.delete_remote_article')),
+                    opener: event.submitter,
+                });
+                if (confirmed !== true) return;
 
                 const button = form.querySelector('button[type="submit"]');
                 const statusCell = form.closest('[data-distribution-delete-status]');
@@ -115,8 +128,16 @@
                     }
 
                     if (statusCell && deletedLabel) {
-                        statusCell.innerHTML = `<span class="text-gray-400">${deletedLabel}</span>`;
+                        const deletedStatus = document.createElement('span');
+                        deletedStatus.className = 'text-gray-400';
+                        deletedStatus.textContent = deletedLabel;
+                        statusCell.replaceChildren(deletedStatus);
                     }
+                    window.AdminActionDialog?.notice?.({
+                        title: @js(__('admin.action_dialog.success_title')),
+                        message: @js(__('admin.distribution.message.remote_article_deleted')),
+                        tone: 'success',
+                    });
                 } catch (error) {
                     if (button) {
                         button.disabled = false;
@@ -124,6 +145,13 @@
                         button.textContent = @js(__('admin.distribution.button.delete_remote_article'));
                     }
                     console.error(error);
+                    await window.AdminActionDialog?.alert?.({
+                        title: @js(__('admin.action_dialog.error_title')),
+                        message: (form.dataset.failedTemplate || '__MESSAGE__').replace('__MESSAGE__', error.message || ''),
+                        guidance: @js(__('admin.action_dialog.error_guidance')),
+                        tone: 'error',
+                        confirmLabel: @js(__('admin.action_dialog.close')),
+                    });
                 }
             });
         </script>

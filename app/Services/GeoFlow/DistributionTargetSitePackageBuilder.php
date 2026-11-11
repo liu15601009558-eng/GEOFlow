@@ -27,8 +27,11 @@ class DistributionTargetSitePackageBuilder
 
         $zip->addFromString('.htaccess', $this->rootHtaccess());
         $zip->addFromString('index.html', $this->initialStaticIndex($channel));
+        $zip->addFromString('robots.txt', $this->initialRobotsText($channel));
         $zip->addFromString('llms.txt', $this->initialLlmsText($channel));
         $zip->addFromString('sitemap.txt', $this->initialSitemapText($channel));
+        $zip->addFromString('sitemap.xml', $this->initialSitemapXml($channel));
+        $zip->addFromString('sitemaps/pages-1.xml', $this->initialSitemapXml($channel));
         $zip->addFromString('assets/css/site.css', $this->targetSiteCss());
         $zip->addFromString('assets/js/site.js', $this->targetSiteJs());
         $zip->addFromString('assets/images/.gitkeep', '');
@@ -67,8 +70,16 @@ class DistributionTargetSitePackageBuilder
             'seo_description_template' => $siteSettings['seo_description_template'],
             'featured_limit' => $siteSettings['featured_limit'],
             'per_page' => $siteSettings['per_page'],
+            'article_permalink_policy' => $siteSettings['article_permalink_policy'],
+            'homepage_style' => $siteSettings['homepage_style'] ?? [],
+            'homepage_modules' => $siteSettings['homepage_modules'] ?? [],
+            'home_carousel_slides' => $siteSettings['home_carousel_slides'] ?? [],
+            'frontend_experience_mode' => method_exists($channel, 'frontendExperienceMode') ? $channel->frontendExperienceMode() : 'custom',
+            'article_text_ads' => method_exists($channel, 'effectiveArticleTextAds') ? $channel->effectiveArticleTextAds() : [],
             'active_theme' => (string) ($channel->template_key ?? ''),
             'front_mode' => $frontMode,
+            'package_version' => (string) config('geoflow.app_version', ''),
+            'timezone' => (string) config('app.timezone', 'UTC'),
             'static_publish_enabled' => $staticPublishEnabled,
             'domain' => (string) $channel->domain,
             'public_base_url' => rtrim((string) $channel->endpoint_url, '/'),
@@ -93,8 +104,16 @@ class DistributionTargetSitePackageBuilder
             ."    'seo_description_template' => ".var_export($config['seo_description_template'], true).",\n"
             ."    'featured_limit' => ".$config['featured_limit'].",\n"
             ."    'per_page' => ".$config['per_page'].",\n"
+            ."    'article_permalink_policy' => ".var_export($config['article_permalink_policy'], true).",\n"
+            ."    'homepage_style' => ".var_export($config['homepage_style'], true).",\n"
+            ."    'homepage_modules' => ".var_export($config['homepage_modules'], true).",\n"
+            ."    'home_carousel_slides' => ".var_export($config['home_carousel_slides'], true).",\n"
+            ."    'frontend_experience_mode' => ".var_export($config['frontend_experience_mode'], true).",\n"
+            ."    'article_text_ads' => ".var_export($config['article_text_ads'], true).",\n"
             ."    'active_theme' => ".var_export($config['active_theme'], true).",\n"
             ."    'front_mode' => ".var_export($config['front_mode'], true).",\n"
+            ."    'package_version' => ".var_export($config['package_version'], true).",\n"
+            ."    'timezone' => ".var_export($config['timezone'], true).",\n"
             ."    'static_publish_enabled' => ".($config['static_publish_enabled'] ? 'true' : 'false').",\n"
             ."    'domain' => ".var_export($config['domain'], true).",\n"
             ."    'public_base_url' => ".var_export($config['public_base_url'], true).",\n"
@@ -130,6 +149,7 @@ PHP;
         return <<<'HTACCESS'
 <IfModule mod_rewrite.c>
     RewriteEngine On
+    RewriteRule ^article(?:/.*)?$ index.php [L,QSA]
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteCond %{REQUEST_FILENAME} !-d
     RewriteRule ^ index.php [L]
@@ -154,15 +174,329 @@ HTACCESS;
         $settings['active_theme'] = (string) ($channel->template_key ?? '');
         $themeClass = $this->targetThemeClass($settings);
         $assetVersion = $this->targetAssetVersion($channel);
+        $seo = $this->initialSeoPayload($channel, $settings, '首页');
 
-        return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-            .'<title>'.htmlspecialchars('首页 - '.$siteName, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'</title>'
-            .'<meta name="description" content="'.htmlspecialchars($description, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'">'
+        $head = '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+            .'<title>'.$this->h($seo['page_title']).'</title>'
+            .'<meta name="description" content="'.$this->h($seo['description']).'">';
+        if ($seo['keywords'] !== '') {
+            $head .= '<meta name="keywords" content="'.$this->h($seo['keywords']).'">';
+        }
+        if ($seo['canonical_url'] !== '') {
+            $head .= '<link rel="canonical" href="'.$this->h($seo['canonical_url']).'">';
+        }
+        $head .= '<meta property="og:title" content="'.$this->h($seo['page_title']).'">'
+            .'<meta property="og:description" content="'.$this->h($seo['description']).'">'
+            .'<meta property="og:type" content="'.$this->h($seo['og_type']).'">';
+        if ($seo['canonical_url'] !== '') {
+            $head .= '<meta property="og:url" content="'.$this->h($seo['canonical_url']).'">';
+        }
+        if ($siteName !== '') {
+            $head .= '<meta property="og:site_name" content="'.$this->h($siteName).'">';
+        }
+        if ((string) ($settings['site_favicon'] ?? '') !== '') {
+            $head .= '<link rel="icon" href="'.$this->h((string) $settings['site_favicon']).'">';
+        }
+        $experienceHtml = $this->initialHomepageExperienceHtml($settings);
+        if ($experienceHtml === '') {
+            $experienceHtml = '<section class="hero"><h1>'.$this->h($siteName).'</h1><p>'.$this->h($description).'</p></section>';
+        }
+
+        return $head
             .'<link rel="stylesheet" href="assets/css/site.css?v='.$assetVersion.'"><script defer src="assets/js/site.js?v='.$assetVersion.'"></script>'
-            .'</head><body class="'.htmlspecialchars($themeClass, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'"><header><div class="wrap bar"><div class="brand">'.htmlspecialchars($siteName, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'</div></div></header><main class="wrap">'
-            .'<section class="hero"><h1>'.htmlspecialchars($siteName, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'</h1><p>'.htmlspecialchars($description, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'</p></section>'
+            .'</head><body class="'.$this->h($themeClass).'"><header><div class="wrap bar"><div class="brand">'.$this->h($siteName).'</div></div></header><main class="wrap">'
+            .$experienceHtml
             .'<div class="empty">暂无文章。请先从 GEOFlow 发布一篇绑定此渠道的文章。</div></main>'
-            .'<footer><div class="wrap">'.htmlspecialchars($copyright, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'</div></footer></body></html>';
+            .'<footer><div class="wrap">'.$this->h($copyright).'</div></footer></body></html>';
+    }
+
+    /**
+     * @param  array<string, mixed>  $settings
+     */
+    private function initialHomepageExperienceHtml(array $settings): string
+    {
+        return $this->initialHomeCarouselHtml($settings).$this->initialHomepageModulesHtml($settings);
+    }
+
+    /**
+     * @param  array<string, mixed>  $settings
+     */
+    private function initialHomeCarouselHtml(array $settings): string
+    {
+        $slides = array_values(array_filter(
+            DistributionChannel::normalizeHomeCarouselSlides($settings['home_carousel_slides'] ?? []),
+            static fn (array $slide): bool => ! empty($slide['enabled'])
+        ));
+        if ($slides === []) {
+            return '';
+        }
+
+        $html = '<section class="homepage-carousel" style="'.$this->h($this->initialHomepageStyleAttribute($settings)).'"><div class="homepage-carousel-track">';
+        foreach ($slides as $slide) {
+            $imageUrl = $this->initialHomepageHref((string) $slide['image_url']);
+            if ($imageUrl === '') {
+                continue;
+            }
+
+            $title = (string) $slide['title'];
+            $linkUrl = $this->initialHomepageHref((string) $slide['link_url']);
+            $html .= '<article class="homepage-slide">';
+            $html .= $linkUrl !== '' ? '<a class="homepage-slide-media" href="'.$this->h($linkUrl).'">' : '<div class="homepage-slide-media">';
+            $html .= '<img src="'.$this->h($imageUrl).'" alt="'.$this->h($title).'">';
+            $html .= $linkUrl !== '' ? '</a>' : '</div>';
+            if ($title !== '') {
+                $html .= '<div class="homepage-slide-copy">';
+                $html .= $linkUrl !== '' ? '<a href="'.$this->h($linkUrl).'">'.$this->h($title).'</a>' : $this->h($title);
+                $html .= '</div>';
+            }
+            $html .= '</article>';
+        }
+
+        return $html.'</div></section>';
+    }
+
+    /**
+     * @param  array<string, mixed>  $settings
+     */
+    private function initialHomepageModulesHtml(array $settings): string
+    {
+        $modules = DistributionChannel::normalizeHomepageModules($settings['homepage_modules'] ?? []);
+        if ($modules === []) {
+            return '';
+        }
+
+        $html = '<section class="homepage-modules" style="'.$this->h($this->initialHomepageStyleAttribute($settings)).'">';
+        foreach ($modules as $module) {
+            $html .= $this->initialHomepageModuleHtml($module);
+        }
+
+        return $html.'</section>';
+    }
+
+    /**
+     * @param  array<string, mixed>  $module
+     */
+    private function initialHomepageModuleHtml(array $module): string
+    {
+        $type = (string) $module['type'];
+        $style = $this->initialHomepageModuleStyleAttribute($module);
+        $html = '<section class="'.$this->h('homepage-module homepage-'.$type.' align-'.(string) $module['alignment']).'"'.($style !== '' ? ' style="'.$this->h($style).'"' : '').'>';
+
+        if ($type === 'image_band') {
+            $html .= '<div class="homepage-module-inner">';
+            if ((string) $module['image_url'] !== '') {
+                $html .= '<img src="'.$this->h($this->initialHomepageHref((string) $module['image_url'])).'" alt="'.$this->h((string) $module['title']).'">';
+            }
+
+            return $html.'<div class="module-copy">'.$this->initialHomepageModuleHeadingHtml($module).$this->initialHomepageActionHtml($module).'</div></div></section>';
+        }
+
+        $html .= '<div class="homepage-module-inner'.(((string) $module['layout']) === 'split' ? ' homepage-split' : '').'"><div>';
+        $html .= $this->initialHomepageModuleHeadingHtml($module, $type === 'hero' ? 'h1' : 'h2');
+        $html .= $this->initialHomepageActionHtml($module).'</div>';
+
+        if ($type === 'hero' && (string) $module['image_url'] !== '') {
+            $html .= '<div class="homepage-media"><img src="'.$this->h($this->initialHomepageHref((string) $module['image_url'])).'" alt="'.$this->h((string) $module['title']).'"></div>';
+        } elseif ($type === 'metric_band') {
+            $html .= '<div class="homepage-metrics">';
+            foreach (array_slice($this->initialHomepageRows((string) $module['body']), 0, 6) as $row) {
+                $html .= '<div class="metric-item"><span>'.$this->h((string) ($row[0] ?? '')).'</span><strong>'.$this->h((string) ($row[1] ?? '')).'</strong>';
+                if ((string) ($row[2] ?? '') !== '') {
+                    $html .= '<span>'.$this->h((string) $row[2]).'</span>';
+                }
+                $html .= '</div>';
+            }
+            $html .= '</div>';
+        } elseif ($type === 'chart_band') {
+            $html .= '<div class="homepage-chart-bars">';
+            foreach (array_slice($this->initialHomepageRows((string) $module['body']), 0, 8) as $row) {
+                $label = (string) ($row[0] ?? '');
+                $value = min(100, max(0, (int) ($row[1] ?? 0)));
+                $html .= '<div class="chart-row"><strong>'.$this->h($label).'</strong><div class="chart-bar"><i style="--bar-width:'.$value.'%"></i></div><span>'.$value.'%</span></div>';
+            }
+            $html .= '</div>';
+        } elseif ($type === 'feature_grid') {
+            $html .= '<div class="homepage-features">';
+            foreach (array_slice($this->initialHomepageRows((string) $module['body']), 0, 9) as $row) {
+                $url = $this->initialHomepageHref((string) ($row[2] ?? ''));
+                $title = $this->h((string) ($row[0] ?? ''));
+                $html .= '<div class="feature-item"><h3>'.($url !== '' ? '<a href="'.$this->h($url).'">'.$title.'</a>' : $title).'</h3><p>'.$this->h((string) ($row[1] ?? '')).'</p></div>';
+            }
+            $html .= '</div>';
+        } elseif ($type === 'article_collection') {
+            $html .= '<div class="homepage-article-grid"></div>';
+        } elseif ($type === 'custom_html') {
+            $html .= '<div class="homepage-custom-html">'.(string) $module['custom_html'].'</div>';
+        }
+
+        return $html.'</div></section>';
+    }
+
+    /**
+     * @param  array<string, mixed>  $module
+     */
+    private function initialHomepageModuleHeadingHtml(array $module, string $headingTag = 'h2'): string
+    {
+        $html = '';
+        if ((string) $module['subtitle'] !== '') {
+            $html .= '<div class="module-kicker">'.$this->h((string) $module['subtitle']).'</div>';
+        }
+        if ((string) $module['title'] !== '') {
+            $html .= '<'.$headingTag.'>'.$this->h((string) $module['title']).'</'.$headingTag.'>';
+        }
+        if ((string) $module['body'] !== '' && ! in_array((string) $module['type'], ['metric_band', 'chart_band', 'feature_grid'], true)) {
+            $html .= '<p>'.nl2br($this->h((string) $module['body'])).'</p>';
+        }
+
+        return $html;
+    }
+
+    /**
+     * @param  array<string, mixed>  $module
+     */
+    private function initialHomepageActionHtml(array $module): string
+    {
+        $url = $this->initialHomepageHref((string) $module['link_url']);
+        $text = (string) $module['link_text'];
+
+        return $url !== '' && $text !== ''
+            ? '<a class="module-action" href="'.$this->h($url).'">'.$this->h($text).'</a>'
+            : '';
+    }
+
+    /**
+     * @return list<list<string>>
+     */
+    private function initialHomepageRows(string $body): array
+    {
+        $rows = [];
+        foreach (preg_split('/\r?\n/u', trim($body)) ?: [] as $line) {
+            $line = trim((string) $line);
+            if ($line === '') {
+                continue;
+            }
+            $rows[] = array_map(static fn (string $part): string => trim($part), explode('|', $line));
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @param  array<string, mixed>  $settings
+     */
+    private function initialHomepageStyleAttribute(array $settings): string
+    {
+        $style = DistributionChannel::normalizeHomepageStyle($settings['homepage_style'] ?? []);
+        $radius = match ($style['radius']) {
+            'none' => '0px',
+            'round' => '20px',
+            default => '8px',
+        };
+
+        return sprintf(
+            '--homepage-accent:%s;--homepage-bg:%s;--homepage-surface:%s;--homepage-text:%s;--homepage-muted:%s;--homepage-radius:%s',
+            $style['accent_color'],
+            $style['background_color'],
+            $style['surface_color'],
+            $style['text_color'],
+            $style['muted_color'],
+            $radius
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $module
+     */
+    private function initialHomepageModuleStyleAttribute(array $module): string
+    {
+        $styles = [];
+        foreach ([
+            'accent_color' => '--module-accent',
+            'surface_color' => '--module-surface',
+            'text_color' => '--module-text',
+            'muted_color' => '--module-muted',
+        ] as $field => $variable) {
+            $color = trim((string) ($module[$field] ?? ''));
+            if ($color !== '') {
+                $styles[] = $variable.':'.$color;
+            }
+        }
+
+        return implode(';', $styles);
+    }
+
+    private function initialHomepageHref(string $url): string
+    {
+        $url = trim($url);
+        if ($url === '' || str_starts_with($url, '//')) {
+            return '';
+        }
+        if (str_starts_with($url, '/') || preg_match('#^https?://#i', $url) === 1) {
+            return $url;
+        }
+        if (preg_match('#^[a-z][a-z0-9+.-]*:#i', $url) === 1) {
+            return '';
+        }
+
+        return '/'.ltrim($url, '/');
+    }
+
+    /**
+     * @param  array<string, mixed>  $settings
+     * @return array{page_title:string,description:string,keywords:string,canonical_url:string,og_type:string}
+     */
+    private function initialSeoPayload(DistributionChannel $channel, array $settings, string $title): array
+    {
+        $siteName = (string) ($settings['site_name'] ?? '');
+        $titleTemplate = (string) ($settings['seo_title_template'] ?? '{title} - {site_name}');
+        $descriptionTemplate = (string) ($settings['seo_description_template'] ?? '{description}');
+        $description = (string) ($settings['site_description'] ?? '');
+        $keywords = (string) ($settings['site_keywords'] ?? '');
+        $canonicalUrl = $this->initialCanonicalUrl($channel);
+
+        return [
+            'page_title' => $this->renderInitialTemplateString($titleTemplate, [
+                'title' => $title,
+                'site_name' => $siteName,
+                'category' => '',
+            ]),
+            'description' => $this->renderInitialTemplateString($descriptionTemplate, [
+                'description' => $description,
+                'site_name' => $siteName,
+                'keywords' => $keywords,
+            ]),
+            'keywords' => $keywords,
+            'canonical_url' => $canonicalUrl,
+            'og_type' => 'website',
+        ];
+    }
+
+    private function initialCanonicalUrl(DistributionChannel $channel): string
+    {
+        $base = trim((string) $channel->endpoint_url);
+        if ($base === '') {
+            $domain = trim((string) $channel->domain);
+            $base = $domain !== '' ? 'https://'.$domain : '';
+        }
+
+        return $base !== '' ? $this->publicFrontBaseUrl($base).'/' : '';
+    }
+
+    /**
+     * @param  array<string, string>  $vars
+     */
+    private function renderInitialTemplateString(string $template, array $vars): string
+    {
+        foreach ($vars as $key => $value) {
+            $template = str_replace('{'.$key.'}', $value, $template);
+        }
+
+        return trim($template);
+    }
+
+    private function h(string $value): string
+    {
+        return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
     /**
@@ -220,15 +554,57 @@ HTACCESS;
         return "# {$siteName}\n\n"
             .($description !== '' ? "> {$description}\n\n" : '')
             ."## Site\n\n"
-            ."- Home: {$homeUrl}\n"
-            ."- Sitemap: {$homeUrl}sitemap.txt\n\n"
+            ."- [Home]({$homeUrl}): The public site homepage.\n"
+            ."- [XML Sitemap]({$homeUrl}sitemap.xml): Canonical URLs and verified last modification timestamps for search engines.\n"
+            ."- [Text Sitemap]({$homeUrl}sitemap.txt): One canonical URL per line for simple sitemap consumers.\n\n"
             ."## Articles\n\n"
             ."No articles have been published yet.\n";
+    }
+
+    private function initialRobotsText(DistributionChannel $channel): string
+    {
+        $homeUrl = $this->publicFrontBaseUrl((string) $channel->endpoint_url).'/';
+        $lines = [
+            'User-agent: *',
+            'Allow: /',
+        ];
+        foreach ([
+            '/admin/', '/api/', '/app', '/broadcasting/', '/config.php', '/horizon/', '/livewire/',
+            '/sanctum/', '/storage/', '/up', '/vendor/', '/_boost/', '/_debugbar/',
+            '/search', '/search/', '/query', '/query/', '/find', '/find/', '/*?*',
+            '/*.avif$', '/*.gif$', '/*.jpeg$', '/*.jpg$', '/*.png$', '/*.svg$', '/*.webp$',
+        ] as $path) {
+            $lines[] = 'Disallow: '.$path;
+        }
+        foreach (['facebookexternalhit', 'Facebot', 'facebookcatalog'] as $userAgent) {
+            $lines[] = '';
+            $lines[] = 'User-agent: '.$userAgent;
+            $lines[] = 'Disallow: /';
+        }
+        $lines[] = '';
+        $lines[] = 'Sitemap: '.$homeUrl.'sitemap.xml';
+        $lines[] = 'Sitemap: '.$homeUrl.'sitemap.txt';
+
+        return implode("\n", $lines)."\n";
     }
 
     private function initialSitemapText(DistributionChannel $channel): string
     {
         return $this->publicFrontBaseUrl((string) $channel->endpoint_url)."/\n";
+    }
+
+    private function initialSitemapXml(DistributionChannel $channel): string
+    {
+        $homeUrl = htmlspecialchars(
+            $this->publicFrontBaseUrl((string) $channel->endpoint_url).'/',
+            ENT_XML1 | ENT_QUOTES,
+            'UTF-8',
+        );
+
+        return '<?xml version="1.0" encoding="UTF-8"?>'."\n"
+            .'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'."\n"
+            .'  <url><loc>'.$homeUrl.'</loc></url>'."\n"
+            .'</urlset>'."\n";
     }
 
     private function publicFrontBaseUrl(string $endpointUrl): string
@@ -266,8 +642,11 @@ h2{font-size:22px;margin:0 0 10px}h2 a{color:#111827;text-decoration:none}h2 a:h
 .content img{display:block;max-width:100%;height:auto;border-radius:8px;margin:24px auto}.content blockquote{margin:1.4em 0;padding:14px 18px;border-left:4px solid #dbeafe;background:#f8fafc;color:#374151}
 .content pre{overflow:auto;border-radius:8px;background:#111827;color:#f9fafb;padding:16px;margin:1.4em 0}.content code{border-radius:4px;background:#f3f4f6;padding:2px 5px;font-size:.92em}.content pre code{background:transparent;padding:0;color:inherit}
 .content .article-table-wrap{overflow-x:auto;margin:1.4em 0;border:1px solid #e5e7eb;border-radius:8px}.content .article-table{width:100%;border-collapse:collapse;background:#fff}.content .article-table th,.content .article-table td{border-bottom:1px solid #e5e7eb;padding:10px 12px;text-align:left;vertical-align:top}.content .article-table th{background:#f9fafb;color:#111827;font-weight:700}
+.article-text-ads{display:grid;gap:10px;margin:18px 0;padding:12px 0;border-top:1px solid rgba(148,163,184,.26);border-bottom:1px solid rgba(148,163,184,.26);background:transparent;font:inherit}.article-text-ads--content-top{margin-top:0;margin-bottom:22px}.article-text-ads--content-bottom{margin-top:26px;margin-bottom:0}.article-text-ad-module{display:flex;flex-direction:column;gap:6px;background:transparent}.article-text-ad-link{display:inline-flex;align-items:center;width:max-content;max-width:100%;color:var(--article-text-ad-color,#2563eb);font:inherit;font-weight:700;line-height:1.65;text-decoration:none}.article-text-ad-link:hover{text-decoration:underline;text-underline-offset:4px}.article-text-ad-text{overflow-wrap:anywhere}
 .tags{display:flex;flex-wrap:wrap;gap:8px;margin-top:28px;padding-top:22px;border-top:1px solid #e5e7eb}.tags span{display:inline-flex;border:1px solid #e5e7eb;background:#f9fafb;color:#4b5563;border-radius:999px;padding:5px 10px;font-size:13px}
 .empty{padding:52px;text-align:center;color:#6b7280}.back{display:inline-block;margin:28px 0 18px;color:#4b5563;text-decoration:none}
+.homepage-carousel{padding:32px 0 4px}.homepage-carousel-track{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}.homepage-slide{position:relative;overflow:hidden;border:1px solid rgba(148,163,184,.24);border-radius:var(--homepage-radius,8px);background:var(--homepage-surface,#fff);color:var(--homepage-text,#111827)}.homepage-slide-media{display:block;aspect-ratio:16/9;background:#e5e7eb}.homepage-slide-media img{display:block;width:100%;height:100%;object-fit:cover}.homepage-slide-copy{padding:14px 16px;font-weight:800;line-height:1.35;overflow-wrap:anywhere}.homepage-slide-copy a{color:var(--homepage-text,#111827);text-decoration:none}.homepage-slide-copy a:hover{color:var(--homepage-accent,#2563eb)}
+.homepage-modules{display:grid;gap:22px;padding:32px 0}.homepage-module{border-radius:var(--homepage-radius,8px);background:var(--module-surface,var(--homepage-surface,#fff));color:var(--module-text,var(--homepage-text,#111827));border:1px solid rgba(148,163,184,.24);overflow:hidden}.homepage-module-inner{padding:28px}.homepage-module h1,.homepage-module h2{letter-spacing:0;margin:0 0 10px;overflow-wrap:anywhere}.homepage-module p{color:var(--module-muted,var(--homepage-muted,#6b7280));line-height:1.7;margin:0 0 16px}.homepage-module a{color:var(--module-accent,var(--homepage-accent,#2563eb))}.homepage-module .module-kicker{color:var(--module-accent,var(--homepage-accent,#2563eb));font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.homepage-module .module-action{display:inline-flex;align-items:center;border-radius:999px;background:var(--module-accent,var(--homepage-accent,#2563eb));color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:9px 15px}.homepage-module.align-center{text-align:center}.homepage-hero h1{font-size:clamp(34px,6vw,68px);line-height:1.02}.homepage-split{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(280px,.95fr);gap:24px;align-items:center}.homepage-media img,.homepage-image-band img{display:block;width:100%;height:auto;border-radius:calc(var(--homepage-radius,8px) - 2px)}.homepage-image-band .homepage-module-inner{padding:0}.homepage-image-band .module-copy{padding:24px}.homepage-metrics,.homepage-features,.homepage-chart-bars,.homepage-article-grid{display:grid;gap:14px}.homepage-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.metric-item,.feature-item,.chart-row,.homepage-article-card{border:1px solid rgba(148,163,184,.22);border-radius:calc(var(--homepage-radius,8px) - 2px);background:rgba(255,255,255,.72);padding:16px}.metric-item strong{display:block;font-size:28px;line-height:1.1}.metric-item span,.chart-row span{display:block;color:var(--module-muted,var(--homepage-muted,#6b7280));font-size:13px}.homepage-features,.homepage-article-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.feature-item h3,.homepage-article-card h3{margin:0 0 8px;font-size:18px;line-height:1.25}.chart-row strong{display:block;margin-bottom:8px}.chart-bar{height:10px;border-radius:999px;background:rgba(37,99,235,.14);overflow:hidden}.chart-bar i{display:block;height:100%;width:var(--bar-width,0%);background:var(--module-accent,var(--homepage-accent,#2563eb))}.homepage-custom-html :first-child{margin-top:0}.homepage-custom-html :last-child{margin-bottom:0}
 footer{border-top:1px solid #e5e7eb;color:#6b7280;font-size:13px;padding:24px 0 36px}
 body.target-theme-toutiao{background:#fffafa}.target-theme-toutiao header{border-bottom-color:#fecaca}.target-theme-toutiao .brand,.target-theme-toutiao h2 a:hover,.target-theme-toutiao .read{color:#dc2626}.target-theme-toutiao .chip{border-color:#fecaca;background:#fef2f2;color:#b91c1c}.target-theme-toutiao .card{border-color:#fee2e2}
 body.target-theme-netease{background:#f7f7f7}.target-theme-netease header{border-top:3px solid #d7000f}.target-theme-netease .brand,.target-theme-netease h2 a:hover,.target-theme-netease .read{color:#b91c1c}.target-theme-netease .chip{border-color:#fee2e2;background:#fff1f2;color:#991b1b}.target-theme-netease .hero h1{font-weight:900}.target-theme-netease .card{box-shadow:none}
@@ -276,6 +655,7 @@ body.target-theme-apparel{background:#f7f4ee;color:#1d2527;font-family:Georgia,"
 .target-theme-apparel{--asi-ink:#1d2527;--asi-muted:#657173;--asi-soft:#f7f4ee;--asi-paper:#fffdf8;--asi-line:#d9d3c7;--asi-green:#24483f;--asi-sage:#6f8379;--asi-brass:#a87628;--asi-red:#8f352c;--asi-shadow:0 18px 50px rgba(29,37,39,.11);background:var(--asi-soft);color:var(--asi-ink);font-family:Georgia,"Times New Roman",serif}.target-theme-apparel a{color:inherit;text-decoration:none}.target-theme-apparel .wrap{max-width:none;padding:0}.target-theme-apparel .asi-shell{width:min(1180px,calc(100vw - 48px));margin:0 auto}.target-theme-apparel header{position:static;border:0;background:transparent}.target-theme-apparel main.wrap{max-width:none;padding:0}.target-theme-apparel .asi-topline{background:var(--asi-green);color:#fbf6ea;font-family:"Segoe UI",Tahoma,sans-serif;font-size:12px;letter-spacing:.08em;text-transform:uppercase}.target-theme-apparel .asi-topline-row{display:flex;justify-content:space-between;gap:24px;padding:9px 0}.target-theme-apparel .asi-masthead{border-bottom:1px solid var(--asi-line);background:rgba(255,253,248,.97)}.target-theme-apparel .asi-masthead-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:22px;padding:24px 0 22px}.target-theme-apparel .asi-brand{display:grid;gap:8px;min-width:0}.target-theme-apparel .asi-brand-kicker{color:var(--asi-muted);font-family:"Segoe UI",Tahoma,sans-serif;font-size:13px;letter-spacing:.09em;line-height:1.4;text-transform:uppercase}.target-theme-apparel .asi-brand-name{max-width:820px;font-size:clamp(34px,5vw,62px);font-weight:700;letter-spacing:0;line-height:.95;overflow-wrap:anywhere}.target-theme-apparel .asi-search{display:grid;grid-template-columns:minmax(120px,1fr) auto;align-items:center;width:min(340px,36vw);border:1px solid var(--asi-line);border-radius:999px;background:#fff;padding:5px}.target-theme-apparel .asi-search input{min-width:0;border:0;background:transparent;color:var(--asi-ink);font-family:"Segoe UI",Tahoma,sans-serif;font-size:14px;outline:none;padding:8px 12px}.target-theme-apparel .asi-search button{border:0;border-radius:999px;background:var(--asi-green);color:#fffdf8;font-family:"Segoe UI",Tahoma,sans-serif;font-size:13px;font-weight:700;padding:8px 14px}.target-theme-apparel .asi-nav{display:flex;justify-content:center;gap:24px;border-top:1px solid var(--asi-line);padding:12px 0;color:#394548;font-family:"Segoe UI",Tahoma,sans-serif;font-size:14px;overflow-x:auto}.target-theme-apparel .asi-nav a{border-bottom:2px solid transparent;padding:2px 0;white-space:nowrap}.target-theme-apparel .asi-nav a:hover,.target-theme-apparel .asi-nav .is-active{border-color:var(--asi-brass);color:var(--asi-green)}.target-theme-apparel .asi-page{padding:34px 0 54px}.target-theme-apparel .asi-hero{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(320px,.8fr);gap:28px;align-items:stretch}.target-theme-apparel .asi-lead{display:grid;grid-template-rows:minmax(290px,1fr) auto;min-height:510px;border-bottom:1px solid var(--asi-ink)}.target-theme-apparel .asi-visual{position:relative;display:block;overflow:hidden;border-radius:6px;background:#e7dfd2;min-height:110px}.target-theme-apparel .asi-visual img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scale(1.01);transition:transform .35s ease}.target-theme-apparel .asi-visual:hover img{transform:scale(1.05)}.target-theme-apparel .asi-visual-pattern{position:absolute;inset:0;display:grid;place-items:center;background:linear-gradient(135deg,rgba(36,72,63,.18),rgba(168,118,40,.2)),repeating-linear-gradient(90deg,rgba(29,37,39,.08) 0 1px,transparent 1px 32px),repeating-linear-gradient(0deg,rgba(29,37,39,.06) 0 1px,transparent 1px 26px),#efe8dc}.target-theme-apparel .asi-visual-pattern span{display:grid;place-items:center;width:74px;height:74px;border:1px solid rgba(36,72,63,.22);border-radius:50%;background:rgba(255,253,248,.82);color:var(--asi-green);font-family:"Segoe UI",Tahoma,sans-serif;font-size:32px;font-weight:800}.target-theme-apparel .asi-lead-visual{min-height:320px;box-shadow:var(--asi-shadow)}.target-theme-apparel .asi-visual-badge{position:absolute;left:18px;bottom:18px;max-width:calc(100% - 36px);border:1px solid rgba(217,211,199,.88);border-radius:6px;background:rgba(255,253,248,.94);font-family:"Segoe UI",Tahoma,sans-serif;font-size:12px;letter-spacing:.08em;line-height:1.4;overflow-wrap:anywhere;padding:10px 12px;text-transform:uppercase}.target-theme-apparel .asi-lead-copy{padding-top:22px}.target-theme-apparel .asi-kicker,.target-theme-apparel .asi-panel-kicker,.target-theme-apparel .asi-article-section{color:var(--asi-red);font-family:"Segoe UI",Tahoma,sans-serif;font-size:12px;font-weight:800;letter-spacing:.1em;line-height:1.5;text-transform:uppercase}.target-theme-apparel .asi-lead h1,.target-theme-apparel .asi-article-head h1{margin:0;font-size:clamp(36px,4vw,58px);font-weight:700;letter-spacing:0;line-height:.99;overflow-wrap:anywhere}.target-theme-apparel .asi-lead h1{margin-top:12px;max-width:720px}.target-theme-apparel .asi-lead p,.target-theme-apparel .asi-article-head p{max-width:680px;margin:16px 0 0;color:#465153;font-family:"Segoe UI",Tahoma,sans-serif;font-size:17px;line-height:1.58}.target-theme-apparel .asi-hero-rail{display:grid;grid-template-rows:auto 1fr;gap:18px}.target-theme-apparel .asi-briefing,.target-theme-apparel .asi-briefing-panel{background:var(--asi-green);color:#fffaf0}.target-theme-apparel .asi-briefing{display:grid;align-content:space-between;min-height:172px;border-radius:6px;padding:22px}.target-theme-apparel .asi-briefing span,.target-theme-apparel .asi-briefing small{font-family:"Segoe UI",Tahoma,sans-serif;font-size:12px;letter-spacing:.08em;text-transform:uppercase}.target-theme-apparel .asi-briefing strong{display:block;margin-top:18px;font-size:28px;line-height:1.05}.target-theme-apparel .asi-briefing div{display:grid;grid-template-columns:1fr auto;gap:18px;border-top:1px solid rgba(255,255,255,.24);margin-top:20px;padding-top:16px}.target-theme-apparel .asi-headline-stack,.target-theme-apparel .asi-feed-section,.target-theme-apparel .asi-panel{border:1px solid var(--asi-line);border-radius:6px;background:var(--asi-paper)}.target-theme-apparel .asi-headline-stack{overflow:hidden}.target-theme-apparel .asi-mini-story{display:grid;grid-template-columns:112px minmax(0,1fr);gap:16px;min-height:128px;border-bottom:1px solid var(--asi-line);padding:18px}.target-theme-apparel .asi-mini-story:last-child{border-bottom:0}.target-theme-apparel .asi-mini-visual{min-height:92px}.target-theme-apparel .asi-mini-story h2{margin:0;font-size:20px;letter-spacing:0;line-height:1.12;overflow-wrap:anywhere}.target-theme-apparel .asi-meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;color:var(--asi-muted);font-family:"Segoe UI",Tahoma,sans-serif;font-size:12px;letter-spacing:.04em;line-height:1.5;text-transform:uppercase}.target-theme-apparel .asi-meta a,.target-theme-apparel .asi-meta span:first-child{color:var(--asi-red);font-weight:800}.target-theme-apparel .asi-content-grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:34px;align-items:start;margin-top:38px}.target-theme-apparel .asi-feed-section{border-top:3px solid var(--asi-ink);overflow:hidden}.target-theme-apparel .asi-section-head,.target-theme-apparel .asi-panel-head{display:flex;align-items:center;justify-content:space-between;gap:16px;border-bottom:1px solid var(--asi-line);margin:0 18px;padding:18px 0}.target-theme-apparel .asi-section-head span,.target-theme-apparel .asi-panel-head h2{margin:0;color:var(--asi-ink);font-family:"Segoe UI",Tahoma,sans-serif;font-size:18px;font-weight:800;letter-spacing:.08em;line-height:1.25;text-transform:uppercase}.target-theme-apparel .asi-feed-list{display:grid}.target-theme-apparel .asi-card{display:grid;grid-template-columns:150px minmax(0,1fr);gap:20px;align-items:start;border-bottom:1px solid var(--asi-line);padding:20px 18px}.target-theme-apparel .asi-card:last-child{border-bottom:0}.target-theme-apparel .asi-card-visual{aspect-ratio:4/3;min-height:112px}.target-theme-apparel .asi-card h2{margin:6px 0 0;font-size:25px;font-weight:700;letter-spacing:0;line-height:1.14;overflow-wrap:anywhere}.target-theme-apparel .asi-card p{margin:9px 0 0;color:#4d595b;font-family:"Segoe UI",Tahoma,sans-serif;font-size:14px;line-height:1.6}.target-theme-apparel .asi-sidebar{display:grid;gap:22px}.target-theme-apparel .asi-panel{padding-bottom:18px}.target-theme-apparel .asi-briefing-panel{border-color:var(--asi-green);padding:22px}.target-theme-apparel .asi-briefing-panel h2{margin:14px 0 0;font-size:28px;line-height:1.08}.target-theme-apparel .asi-briefing-panel p{color:rgba(255,250,240,.78);font-family:"Segoe UI",Tahoma,sans-serif;line-height:1.6}.target-theme-apparel .asi-rank-list{display:grid}.target-theme-apparel .asi-rank-item{display:grid;grid-template-columns:34px minmax(0,1fr);gap:12px;border-bottom:1px solid var(--asi-line);padding:14px 18px}.target-theme-apparel .asi-rank-item:last-child{border-bottom:0}.target-theme-apparel .asi-rank-item span{color:var(--asi-brass);font-size:24px;font-weight:700}.target-theme-apparel .asi-rank-item strong{font-size:17px;line-height:1.22}.target-theme-apparel .asi-article-layout{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:34px;padding:34px 0 56px}.target-theme-apparel .asi-breadcrumb{display:flex;gap:8px;margin-bottom:18px;color:var(--asi-muted);font-family:"Segoe UI",Tahoma,sans-serif;font-size:13px;text-transform:uppercase}.target-theme-apparel .asi-article{border-top:3px solid var(--asi-ink);background:var(--asi-paper);border:1px solid var(--asi-line);border-radius:6px;padding:30px}.target-theme-apparel .asi-article-head{border-bottom:1px solid var(--asi-line);padding-bottom:24px}.target-theme-apparel .asi-post-info{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px;color:var(--asi-muted);font-family:"Segoe UI",Tahoma,sans-serif;font-size:13px;text-transform:uppercase}.target-theme-apparel .asi-article-visual{aspect-ratio:16/9;margin:28px 0;min-height:280px}.target-theme-apparel .content,.target-theme-apparel .asi-prose{font-size:18px;line-height:1.92;color:#263033}.target-theme-apparel .content h2,.target-theme-apparel .asi-prose h2{font-size:28px;line-height:1.18;margin:1.6em 0 .65em}.target-theme-apparel .tags,.target-theme-apparel .asi-tag-list{display:flex;flex-wrap:wrap;gap:8px;margin-top:28px;padding-top:22px;border-top:1px solid var(--asi-line)}.target-theme-apparel .tags span,.target-theme-apparel .asi-tag-list span{display:inline-flex;border:1px solid var(--asi-line);border-radius:999px;background:#fff;color:#394548;font-family:"Segoe UI",Tahoma,sans-serif;font-size:13px;font-weight:700;padding:7px 11px}.target-theme-apparel footer{border-top:1px solid var(--asi-line);background:var(--asi-paper);color:var(--asi-muted);font-family:"Segoe UI",Tahoma,sans-serif;padding:28px 0}@media(max-width:900px){.target-theme-apparel .asi-shell{width:min(100% - 32px,1180px)}.target-theme-apparel .asi-topline-row,.target-theme-apparel .asi-masthead-row{display:grid;gap:10px}.target-theme-apparel .asi-search{width:100%}.target-theme-apparel .asi-hero,.target-theme-apparel .asi-content-grid,.target-theme-apparel .asi-article-layout{grid-template-columns:1fr}.target-theme-apparel .asi-card{grid-template-columns:1fr}.target-theme-apparel .asi-card-visual{min-height:200px}.target-theme-apparel .asi-mini-story{grid-template-columns:96px minmax(0,1fr)}.target-theme-apparel .asi-article{padding:22px}}
 body.target-theme-fashion{font-family:"Segoe UI",Tahoma,sans-serif;background:#faf6f0;color:#1f1a17}.target-theme-fashion .wrap{max-width:1280px;padding:0 32px}.target-theme-fashion header{position:fixed;left:0;right:0;top:0;background:rgba(250,246,240,.82);border-bottom:1px solid rgba(239,235,228,.78);backdrop-filter:blur(14px);z-index:20}.target-theme-fashion header .bar{height:76px}.target-theme-fashion .brand{font-family:Georgia,"Times New Roman",serif;font-size:25px;font-weight:600;letter-spacing:.08em}.target-theme-fashion nav a{color:rgba(31,26,23,.62);font-size:13px}.target-theme-fashion main.wrap{padding-top:76px}.target-theme-fashion .fashion-hero{position:relative;text-align:center;overflow:hidden;padding:88px 0 112px}.target-theme-fashion .fashion-wordmark{position:absolute;left:50%;top:4px;transform:translateX(-50%);font-family:Georgia,"Times New Roman",serif;font-size:clamp(96px,16vw,220px);font-weight:800;letter-spacing:.08em;line-height:.85;color:rgba(239,235,228,.68);pointer-events:none;user-select:none}.target-theme-fashion .fashion-hero-inner{position:relative;z-index:1;max-width:820px;margin:0 auto}.target-theme-fashion .fashion-kicker{display:inline-flex;padding-bottom:9px;border-bottom:1px solid rgba(197,168,128,.34);color:#c5a880;text-transform:uppercase;letter-spacing:.25em;font-size:10px;font-weight:700}.target-theme-fashion .fashion-hero h1{margin:36px 0 22px;font-family:Georgia,"Times New Roman",serif;font-size:clamp(44px,7vw,88px);line-height:1.03;font-weight:800;letter-spacing:0}.target-theme-fashion .fashion-hero p{margin:0 auto;max-width:720px;color:rgba(31,26,23,.62);text-transform:uppercase;letter-spacing:.24em;font-size:13px;line-height:1.85;font-weight:600}.target-theme-fashion .fashion-search{display:flex;gap:14px;max-width:700px;margin:38px auto 0}.target-theme-fashion .fashion-search input{flex:1;min-width:0;border:1px solid #efebe4;border-radius:18px;background:rgba(255,255,255,.66);padding:16px 22px;font-size:13px;color:#1f1a17;outline:none}.target-theme-fashion .fashion-search button{border:0;border-radius:18px;background:#1f1a17;color:#fff;padding:0 38px;text-transform:uppercase;letter-spacing:.2em;font-size:12px;font-weight:800;box-shadow:0 14px 28px rgba(31,26,23,.18)}.target-theme-fashion .fashion-section{margin-bottom:84px}.target-theme-fashion .fashion-section-head{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(239,235,228,.82);padding-bottom:18px;margin-bottom:40px}.target-theme-fashion .fashion-section-head h2{margin:0;font-family:Georgia,"Times New Roman",serif;font-size:28px;letter-spacing:0}.target-theme-fashion .fashion-section-head span{font-size:10px;text-transform:uppercase;letter-spacing:.25em;color:rgba(31,26,23,.5);font-weight:700}.target-theme-fashion .fashion-feature-grid{display:grid;grid-template-columns:minmax(0,7fr) minmax(320px,5fr);gap:32px;align-items:stretch}.target-theme-fashion .fashion-feature-card{position:relative;min-height:540px;overflow:hidden;border:1px solid rgba(239,235,228,.72);border-radius:26px;background:linear-gradient(135deg,#1f1a17,#c5a88066);box-shadow:0 20px 52px rgba(31,26,23,.08)}.target-theme-fashion .fashion-feature-card img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.target-theme-fashion .fashion-feature-overlay{position:absolute;inset:0;background:linear-gradient(to top,rgba(31,26,23,.94),rgba(31,26,23,.55),rgba(31,26,23,.08))}.target-theme-fashion .fashion-feature-content{position:absolute;left:44px;right:44px;bottom:38px;color:#fff}.target-theme-fashion .fashion-feature-content>span{display:inline-flex;border-radius:999px;background:#c5a880;color:#1f1a17;padding:6px 12px;font-size:10px;text-transform:uppercase;letter-spacing:.18em;font-weight:800}.target-theme-fashion .fashion-feature-content h3{font-family:Georgia,"Times New Roman",serif;font-size:clamp(30px,4vw,48px);line-height:1.06;margin:20px 0 14px}.target-theme-fashion .fashion-feature-content a{color:inherit;text-decoration:none}.target-theme-fashion .fashion-feature-content p{max-width:680px;color:rgba(255,255,255,.82);font-size:14px;line-height:1.8}.target-theme-fashion .fashion-feature-content div{display:flex;align-items:center;justify-content:space-between;border-top:1px solid rgba(255,255,255,.2);padding-top:18px;margin-top:22px}.target-theme-fashion .fashion-feature-content time{font-size:11px;letter-spacing:.14em;color:rgba(255,255,255,.55)}.target-theme-fashion .fashion-feature-content div a,.target-theme-fashion .fashion-feature-side article>a{font-size:10px;text-transform:uppercase;letter-spacing:.22em;font-weight:800}.target-theme-fashion .fashion-feature-side{display:flex;flex-direction:column;gap:24px}.target-theme-fashion .fashion-feature-side article{flex:1;border:1px solid rgba(239,235,228,.72);border-radius:24px;background:rgba(255,255,255,.42);padding:28px;display:flex;flex-direction:column;justify-content:space-between;transition:background .25s,box-shadow .25s}.target-theme-fashion .fashion-feature-side article:hover,.target-theme-fashion .fashion-card:hover{background:rgba(255,255,255,.78);box-shadow:0 18px 42px rgba(31,26,23,.08)}.target-theme-fashion .fashion-feature-side article div,.target-theme-fashion .fashion-card-meta{display:flex;justify-content:space-between;gap:16px;color:rgba(31,26,23,.54);font-size:10px;text-transform:uppercase;letter-spacing:.18em;font-weight:700}.target-theme-fashion .fashion-feature-side span,.target-theme-fashion .fashion-card-meta span{color:#c5a880}.target-theme-fashion .fashion-feature-side h3,.target-theme-fashion .fashion-card h3{font-family:Georgia,"Times New Roman",serif;line-height:1.15;letter-spacing:0}.target-theme-fashion .fashion-feature-side h3{font-size:24px;margin:18px 0 12px}.target-theme-fashion .fashion-feature-side a,.target-theme-fashion .fashion-card a{color:#1f1a17;text-decoration:none}.target-theme-fashion .fashion-feature-side a:hover,.target-theme-fashion .fashion-card a:hover{color:#c5a880}.target-theme-fashion .fashion-feature-side p,.target-theme-fashion .fashion-card p{color:rgba(31,26,23,.68);font-size:13px;line-height:1.75}.target-theme-fashion .fashion-feature-placeholder{align-items:center;text-align:center;color:rgba(31,26,23,.42);text-transform:uppercase;letter-spacing:.24em;font-size:12px}.target-theme-fashion .fashion-card-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:32px}.target-theme-fashion .fashion-card{border:1px solid rgba(239,235,228,.72);border-radius:24px;background:rgba(255,255,255,.42);padding:22px;display:flex;flex-direction:column;transition:background .25s,box-shadow .25s}.target-theme-fashion .fashion-card-media{display:block;aspect-ratio:4/3;border-radius:18px;overflow:hidden;background:linear-gradient(135deg,#faf6f0,#efebe4);margin-bottom:20px}.target-theme-fashion .fashion-card-media img{width:100%;height:100%;object-fit:cover;transition:transform .45s}.target-theme-fashion .fashion-card:hover img{transform:scale(1.04)}.target-theme-fashion .fashion-card h3{font-size:25px;margin:16px 0 10px}.target-theme-fashion .fashion-card-foot{margin-top:auto;border-top:1px solid rgba(239,235,228,.75);padding-top:18px;text-align:right}.target-theme-fashion .fashion-card-foot a{font-size:10px;text-transform:uppercase;letter-spacing:.22em;font-weight:800}.target-theme-fashion .fashion-empty{border:1px solid #efebe4;border-radius:26px;background:rgba(255,255,255,.34);padding:64px;text-align:center;max-width:760px;margin:0 auto 80px}.target-theme-fashion .fashion-empty h2{font-family:Georgia,"Times New Roman",serif;font-size:28px}.target-theme-fashion .detail{max-width:900px;margin:28px auto 76px;border:1px solid rgba(239,235,228,.8);border-radius:26px;background:rgba(255,255,255,.72);padding:48px;box-shadow:0 20px 52px rgba(31,26,23,.06)}.target-theme-fashion .detail h1{font-size:clamp(38px,5vw,64px);line-height:1.08;letter-spacing:0;margin:16px 0 18px}.target-theme-fashion .fashion-article-kicker{display:flex;gap:14px;color:#c5a880;text-transform:uppercase;letter-spacing:.2em;font-size:11px;font-weight:800}.target-theme-fashion .summary{font-size:16px;line-height:1.85;color:rgba(31,26,23,.6);margin-bottom:30px}.target-theme-fashion .content{font-family:Georgia,"Times New Roman",serif;font-size:18px;line-height:1.95}.target-theme-fashion .back{margin-top:32px}.target-theme-fashion footer{border-top-color:#efebe4;padding:44px 0 52px}@media(max-width:900px){.target-theme-fashion .wrap{padding:0 20px}.target-theme-fashion .fashion-search{flex-direction:column}.target-theme-fashion .fashion-search button{padding:15px 28px}.target-theme-fashion .fashion-feature-grid,.target-theme-fashion .fashion-card-grid{grid-template-columns:1fr}.target-theme-fashion .fashion-feature-card{min-height:420px}.target-theme-fashion .fashion-feature-content{left:26px;right:26px}.target-theme-fashion .fashion-section-head{align-items:flex-start;gap:12px;flex-direction:column}.target-theme-fashion .detail{padding:30px 22px}}
 body.target-theme-boutique{background:#f8f1e6;color:#221b14;font-family:"Segoe UI",Tahoma,sans-serif}.target-theme-boutique header{background:rgba(255,252,246,.96);border-bottom-color:#d6b879}.target-theme-boutique .brand,.target-theme-boutique h2 a:hover,.target-theme-boutique .read{color:#8a6326}.target-theme-boutique .hero h1,.target-theme-boutique .detail h1{font-family:Georgia,"Times New Roman",serif}.target-theme-boutique .chip{border-color:#d6b879;background:#fff7e8;color:#7c5520}.target-theme-boutique .card{border-color:#ead8b7;background:#fffaf2;box-shadow:0 18px 45px rgba(75,48,18,.1)}
+@media(max-width:820px){.homepage-split,.homepage-metrics,.homepage-features,.homepage-article-grid{grid-template-columns:1fr}.homepage-carousel-track{grid-template-columns:1fr}.homepage-module-inner{padding:22px}}
 CSS;
     }
 
@@ -343,6 +723,14 @@ function jsonResponse(int $status, array $payload): void
     exit;
 }
 
+function xmlResponse(string $content, int $status = 200): void
+{
+    http_response_code($status);
+    header('Content-Type: application/xml; charset=utf-8');
+    echo $content;
+    exit;
+}
+
 function textResponse(string $content, int $status = 200): void
 {
     http_response_code($status);
@@ -373,9 +761,660 @@ function siteSettingsFile(array $config): string
     return storageRoot($config).'/site-settings.json';
 }
 
+function activeSiteStateFile(array $config): string
+{
+    return storageRoot($config).'/active-site-state.json';
+}
+
+function readActiveSiteState(array $config): ?array
+{
+    $file = activeSiteStateFile($config);
+    if (! is_file($file)) {
+        return null;
+    }
+
+    $state = json_decode((string) file_get_contents($file), true);
+    if (! is_array($state)
+        || (int) ($state['schema_version'] ?? 0) !== 1
+        || ! is_array($state['settings'] ?? null)
+        || ! is_array($state['manifest'] ?? null)) {
+        return null;
+    }
+
+    return $state;
+}
+
 function imageAssetsDir(array $config): string
 {
     return staticRoot($config).'/assets/images';
+}
+
+function normalizeArticleTextAdUrl(string $url): string
+{
+    $normalized = trim($url);
+    if ($normalized === '' || str_starts_with($normalized, '//')) {
+        return '';
+    }
+
+    if (str_starts_with($normalized, '/')) {
+        return $normalized;
+    }
+
+    if (preg_match('#^https?://#i', $normalized) === 1) {
+        return $normalized;
+    }
+
+    if (preg_match('#^[a-z][a-z0-9+.-]*:#i', $normalized) === 1) {
+        return '';
+    }
+
+    return '/'.ltrim($normalized, '/');
+}
+
+function normalizeArticleTextAdColor(string $color): string
+{
+    $color = trim($color);
+    if (preg_match('/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/', $color) !== 1) {
+        return '#2563eb';
+    }
+
+    $hex = ltrim(strtolower($color), '#');
+    if (strlen($hex) === 3) {
+        $hex = $hex[0].$hex[0].$hex[1].$hex[1].$hex[2].$hex[2];
+    }
+
+    return '#'.$hex;
+}
+
+function normalizeArticleTextAdTrackingParam(string $trackingParam): string
+{
+    $trackingParam = ltrim(trim($trackingParam), "? \t\n\r\0\x0B");
+    if (
+        $trackingParam === ''
+        || strlen($trackingParam) > 250
+        || str_contains($trackingParam, '://')
+        || str_starts_with($trackingParam, '/')
+        || preg_match('/^[A-Za-z0-9._~%=&+;,:@-]+$/', $trackingParam) !== 1
+    ) {
+        return '';
+    }
+
+    return $trackingParam;
+}
+
+function normalizeArticleTextAdLinks(mixed $links, bool $enabledOnly = false, int $maxLinks = 10): array
+{
+    if (! is_array($links)) {
+        return [];
+    }
+
+    $normalized = [];
+    foreach ($links as $link) {
+        if (! is_array($link)) {
+            continue;
+        }
+
+        $text = trim((string) ($link['text'] ?? ''));
+        $url = normalizeArticleTextAdUrl((string) ($link['url'] ?? ''));
+        if ($text === '' || $url === '') {
+            continue;
+        }
+
+        $enabled = ! empty($link['enabled']);
+        if ($enabledOnly && ! $enabled) {
+            continue;
+        }
+
+        $normalized[] = [
+            'id' => trim((string) ($link['id'] ?? '')),
+            'text' => $text,
+            'url' => $url,
+            'text_color' => normalizeArticleTextAdColor((string) ($link['text_color'] ?? '#2563eb')),
+            'open_new_tab' => ! empty($link['open_new_tab']),
+            'tracking_enabled' => ! empty($link['tracking_enabled']),
+            'tracking_param' => normalizeArticleTextAdTrackingParam((string) ($link['tracking_param'] ?? '')),
+            'enabled' => $enabled,
+            'sort_order' => (int) ($link['sort_order'] ?? count($normalized) * 10),
+        ];
+    }
+
+    usort($normalized, static fn (array $a, array $b): int => ((int) $a['sort_order']) <=> ((int) $b['sort_order']));
+
+    return array_slice(array_values($normalized), 0, max(0, $maxLinks));
+}
+
+function legacyArticleTextAdToLink(array $ad): array
+{
+    return [
+        'id' => trim((string) ($ad['id'] ?? '')),
+        'text' => trim((string) ($ad['text'] ?? '')),
+        'url' => (string) ($ad['url'] ?? ''),
+        'text_color' => (string) ($ad['text_color'] ?? '#2563eb'),
+        'open_new_tab' => ! empty($ad['open_new_tab']),
+        'tracking_enabled' => ! empty($ad['tracking_enabled']),
+        'tracking_param' => (string) ($ad['tracking_param'] ?? ''),
+        'enabled' => ! empty($ad['enabled']),
+        'sort_order' => (int) ($ad['sort_order'] ?? 0),
+    ];
+}
+
+function normalizeArticleTextAds(mixed $ads, bool $enabledOnly = false, int $maxModules = 30): array
+{
+    if (! is_array($ads)) {
+        return [];
+    }
+
+    $normalized = [];
+    foreach ($ads as $ad) {
+        if (! is_array($ad)) {
+            continue;
+        }
+
+        $placement = (string) ($ad['placement'] ?? 'content_top');
+        if (! in_array($placement, ['content_top', 'content_bottom'], true)) {
+            continue;
+        }
+
+        $enabled = ! empty($ad['enabled']);
+        if ($enabledOnly && ! $enabled) {
+            continue;
+        }
+
+        $links = normalizeArticleTextAdLinks(
+            is_array($ad['links'] ?? null) ? $ad['links'] : [legacyArticleTextAdToLink($ad)],
+            $enabledOnly
+        );
+        if ($links === []) {
+            continue;
+        }
+
+        $id = trim((string) ($ad['id'] ?? ''));
+        $name = trim((string) ($ad['name'] ?? ''));
+        $sortOrder = (int) ($ad['sort_order'] ?? count($normalized) * 10);
+
+        $normalized[] = [
+            'schema_version' => 2,
+            'id' => $id !== '' ? $id : 'article_text_module_'.md5($placement.'|'.$name.'|'.$sortOrder.'|'.json_encode($links)),
+            'name' => $name !== '' ? $name : (string) ($links[0]['text'] ?? 'Text Ad Module'),
+            'placement' => $placement,
+            'enabled' => $enabled,
+            'sort_order' => $sortOrder,
+            'links' => $links,
+        ];
+    }
+
+    usort($normalized, static function (array $a, array $b): int {
+        $order = ((int) $a['sort_order']) <=> ((int) $b['sort_order']);
+
+        return $order !== 0 ? $order : strcmp((string) $a['name'], (string) $b['name']);
+    });
+
+    return array_slice(array_values($normalized), 0, max(0, $maxModules));
+}
+
+function frontendSupportedModules(): array
+{
+    return [
+        'hero',
+        'rich_text',
+        'image_band',
+        'metric_band',
+        'chart_band',
+        'feature_grid',
+        'article_collection',
+        'cta_band',
+        'custom_html',
+    ];
+}
+
+function normalizeHomepageHexColor(string $color): string
+{
+    $color = trim($color);
+    if (preg_match('/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/', $color) !== 1) {
+        return '';
+    }
+
+    $hex = ltrim(strtolower($color), '#');
+    if (strlen($hex) === 3) {
+        $hex = $hex[0].$hex[0].$hex[1].$hex[1].$hex[2].$hex[2];
+    }
+
+    return '#'.$hex;
+}
+
+function normalizeHomepageUrl(string $url, bool $allowRelative = true): string
+{
+    $normalized = trim($url);
+    if ($normalized === '' || str_starts_with($normalized, '//')) {
+        return '';
+    }
+
+    if ($allowRelative && str_starts_with($normalized, '/')) {
+        return $normalized;
+    }
+
+    if (preg_match('#^https?://#i', $normalized) === 1) {
+        return $normalized;
+    }
+
+    if (preg_match('#^[a-z][a-z0-9+.-]*:#i', $normalized) === 1) {
+        return '';
+    }
+
+    return $allowRelative ? '/'.ltrim($normalized, '/') : '';
+}
+
+function normalizeHomepageStyle(mixed $style): array
+{
+    $style = is_array($style) ? $style : [];
+    $defaults = [
+        'accent_color' => '#2563eb',
+        'background_color' => '#ffffff',
+        'surface_color' => '#ffffff',
+        'text_color' => '#111827',
+        'muted_color' => '#6b7280',
+        'container_width' => 'default',
+        'section_spacing' => 'normal',
+        'radius' => 'soft',
+    ];
+
+    foreach (['accent_color', 'background_color', 'surface_color', 'text_color', 'muted_color'] as $field) {
+        $color = normalizeHomepageHexColor((string) ($style[$field] ?? ''));
+        if ($color !== '') {
+            $defaults[$field] = $color;
+        }
+    }
+    foreach ([
+        'container_width' => ['narrow', 'default', 'wide'],
+        'section_spacing' => ['compact', 'normal', 'relaxed'],
+        'radius' => ['none', 'soft', 'round'],
+    ] as $field => $allowed) {
+        $value = (string) ($style[$field] ?? $defaults[$field]);
+        if (in_array($value, $allowed, true)) {
+            $defaults[$field] = $value;
+        }
+    }
+
+    return $defaults;
+}
+
+function sanitizeHomepageCustomHtml(string $html): string
+{
+    $html = trim($html);
+    if ($html === '') {
+        return '';
+    }
+
+    $html = preg_replace('#<\s*(script|style|iframe|object|embed|form)\b[^>]*>.*?<\s*/\s*\1\s*>#is', '', $html) ?? '';
+    $html = preg_replace('#<\s*(script|style|iframe|object|embed|form)\b[^>]*\/?>#is', '', $html) ?? '';
+    $html = preg_replace('/\son[a-z]+\s*=\s*(".*?"|\'.*?\'|[^\s>]+)/iu', '', $html) ?? '';
+    $html = preg_replace('/javascript\s*:/iu', '', $html) ?? '';
+
+    return mb_substr($html, 0, 4000);
+}
+
+function normalizeHomepageModules(mixed $modules, bool $enabledOnly = true, int $maxModules = 30): array
+{
+    if (! is_array($modules)) {
+        return [];
+    }
+    if (! array_is_list($modules)) {
+        $modules = $modules['modules']
+            ?? $modules['homepage_modules']
+            ?? $modules['sections']
+            ?? $modules['blocks']
+            ?? [];
+    }
+    if (! is_array($modules)) {
+        return [];
+    }
+
+    $normalized = [];
+    foreach (array_values($modules) as $item) {
+        if (! is_array($item) || count($normalized) >= $maxModules) {
+            continue;
+        }
+
+        $type = (string) ($item['type'] ?? 'rich_text');
+        if (! in_array($type, frontendSupportedModules(), true)) {
+            $type = 'rich_text';
+        }
+        $enabled = array_key_exists('enabled', $item) ? ! empty($item['enabled']) : true;
+        if ($enabledOnly && ! $enabled) {
+            continue;
+        }
+        $layout = (string) ($item['layout'] ?? 'single');
+        if (! in_array($layout, ['single', 'split', 'grid', 'compact'], true)) {
+            $layout = 'single';
+        }
+        $dataSource = (string) ($item['data_source'] ?? 'latest');
+        if (! in_array($dataSource, ['featured', 'hot', 'latest'], true)) {
+            $dataSource = 'latest';
+        }
+        $alignment = (string) ($item['alignment'] ?? 'left');
+        if (! in_array($alignment, ['left', 'center'], true)) {
+            $alignment = 'left';
+        }
+
+        $normalized[] = [
+            'id' => trim((string) ($item['id'] ?? 'module_'.md5(json_encode($item)))) ?: 'module_'.count($normalized),
+            'type' => $type,
+            'layout' => $layout,
+            'data_source' => $dataSource,
+            'limit' => min(12, max(1, (int) ($item['limit'] ?? 4))),
+            'sort_order' => min(10000, max(0, (int) ($item['sort_order'] ?? ((count($normalized) + 1) * 10)))),
+            'alignment' => $alignment,
+            'accent_color' => normalizeHomepageHexColor((string) ($item['accent_color'] ?? '')),
+            'surface_color' => normalizeHomepageHexColor((string) ($item['surface_color'] ?? '')),
+            'text_color' => normalizeHomepageHexColor((string) ($item['text_color'] ?? '')),
+            'muted_color' => normalizeHomepageHexColor((string) ($item['muted_color'] ?? '')),
+            'title' => mb_substr(trim((string) ($item['title'] ?? '')), 0, 120),
+            'subtitle' => mb_substr(trim((string) ($item['subtitle'] ?? '')), 0, 180),
+            'body' => mb_substr(trim((string) ($item['body'] ?? '')), 0, 1200),
+            'image_url' => normalizeHomepageUrl((string) ($item['image_url'] ?? ''), true),
+            'link_text' => mb_substr(trim((string) ($item['link_text'] ?? '')), 0, 80),
+            'link_url' => normalizeHomepageUrl((string) ($item['link_url'] ?? ''), true),
+            'custom_html' => sanitizeHomepageCustomHtml((string) ($item['custom_html'] ?? '')),
+            'enabled' => $enabled,
+        ];
+    }
+
+    usort($normalized, static function (array $a, array $b): int {
+        $order = ((int) $a['sort_order']) <=> ((int) $b['sort_order']);
+
+        return $order !== 0 ? $order : strcmp((string) $a['title'], (string) $b['title']);
+    });
+
+    return array_values($normalized);
+}
+
+function normalizeHomeCarouselSlides(mixed $slides): array
+{
+    if (! is_array($slides)) {
+        return [];
+    }
+
+    $normalized = [];
+    foreach (array_values($slides) as $slide) {
+        if (! is_array($slide)) {
+            continue;
+        }
+
+        $imageUrl = normalizeHomepageUrl((string) ($slide['image_url'] ?? ''), true);
+        $title = mb_substr(trim((string) ($slide['title'] ?? '')), 0, 120);
+        $linkUrl = normalizeHomepageUrl((string) ($slide['link_url'] ?? ''), true);
+        if ($imageUrl === '' && $title === '' && $linkUrl === '') {
+            continue;
+        }
+        if ($imageUrl === '') {
+            continue;
+        }
+
+        $normalized[] = [
+            'image_url' => $imageUrl,
+            'title' => $title,
+            'link_url' => $linkUrl,
+            'enabled' => ! empty($slide['enabled']),
+        ];
+
+        if (count($normalized) >= 3) {
+            break;
+        }
+    }
+
+    return $normalized;
+}
+
+function articlePermalinkDefaultPolicy(): array
+{
+    return [
+        'schema_version' => 1,
+        'revision' => 0,
+        'current_pattern' => '/article/{slug}',
+        'activated_at' => null,
+        'history' => [],
+    ];
+}
+
+function articlePermalinkReservedFirstSegments(): array
+{
+    return [
+        '_boost', '_debugbar', 'about', 'admin', 'api', 'app', 'archive', 'assets', 'broadcasting', 'build',
+        'category', 'config.php', 'css', 'favicon.ico', 'forms', 'geoflow-agent', 'horizon',
+        'images', 'index.php', 'js', 'livewire', 'llms.txt', 'robots.txt', 'sanctum',
+        'sitemap.txt', 'sitemap.xml', 'sitemaps', 'storage', 'theme-assets', 'themes', 'topics', 'up', 'vendor',
+    ];
+}
+
+function articlePermalinkUsesRootCategorySegment(string $pattern): bool
+{
+    return explode('/', ltrim($pattern, '/'), 2)[0] === '{category}';
+}
+
+function isReservedArticlePermalinkFirstSegment(string $segment): bool
+{
+    return in_array(mb_strtolower(trim($segment, '/'), 'UTF-8'), articlePermalinkReservedFirstSegments(), true);
+}
+
+function normalizeArticlePermalinkPattern(string $pattern): string
+{
+    $pattern = trim($pattern);
+    if ($pattern !== '/') {
+        $pattern = rtrim($pattern, '/');
+    }
+    if ($pattern === '' || $pattern === '/' || ! str_starts_with($pattern, '/') || strlen($pattern) > 160) {
+        throw new InvalidArgumentException('invalid_article_permalink_pattern');
+    }
+    if (preg_match('/[?#\\\\\x00-\x1F\x7F]/', $pattern) === 1 || str_contains($pattern, '://') || str_contains($pattern, '//')) {
+        throw new InvalidArgumentException('invalid_article_permalink_characters');
+    }
+
+    $segments = explode('/', ltrim($pattern, '/'));
+    if (count($segments) > 8 || in_array('', $segments, true) || in_array('.', $segments, true) || in_array('..', $segments, true)) {
+        throw new InvalidArgumentException('invalid_article_permalink_segments');
+    }
+
+    preg_match_all('/\{([a-z]+)\}/', $pattern, $matches);
+    $tokens = array_values($matches[1] ?? []);
+    $allowedTokens = ['slug', 'id', 'category', 'year', 'month', 'day'];
+    if (count($tokens) !== count(array_unique($tokens)) || array_diff($tokens, $allowedTokens) !== []) {
+        throw new InvalidArgumentException('invalid_article_permalink_tokens');
+    }
+    if (! in_array('slug', $tokens, true) && ! in_array('id', $tokens, true)) {
+        throw new InvalidArgumentException('article_permalink_locator_required');
+    }
+    if (preg_match('/\}\s*\{/', $pattern) === 1) {
+        throw new InvalidArgumentException('article_permalink_token_separator_required');
+    }
+
+    $literals = preg_replace('/\{[a-z]+\}/', '', $pattern);
+    if (! is_string($literals) || str_contains($literals, '{') || str_contains($literals, '}') || preg_match('/[^a-z0-9._\/-]/', $literals) === 1) {
+        throw new InvalidArgumentException('invalid_article_permalink_literals');
+    }
+    if (count($segments) === 1 && str_contains($segments[0], '{slug}') && ! str_ends_with($segments[0], '.html')) {
+        throw new InvalidArgumentException('root_article_slug_requires_html_suffix');
+    }
+
+    if ($segments[0] !== '{category}') {
+        $firstSegmentParts = preg_split('/(\{[a-z]+\})/', $segments[0], -1, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_NO_EMPTY) ?: [];
+        $firstSegmentRegex = '';
+        foreach ($firstSegmentParts as $part) {
+            if (preg_match('/^\{([a-z]+)\}$/', $part, $matches) === 1) {
+                $firstSegmentRegex .= '(?:'.match ((string) $matches[1]) {
+                    'id' => '[1-9][0-9]*',
+                    'year' => '[0-9]{4}',
+                    'month' => '0[1-9]|1[0-2]',
+                    'day' => '0[1-9]|[12][0-9]|3[01]',
+                    'slug', 'category' => '[^/?#]+',
+                }.')';
+            } else {
+                $firstSegmentRegex .= preg_quote($part, '~');
+            }
+        }
+        foreach (articlePermalinkReservedFirstSegments() as $reservedPath) {
+            if (preg_match('~\A'.$firstSegmentRegex.'\z~D', $reservedPath) === 1) {
+                throw new InvalidArgumentException('reserved_article_permalink_path');
+            }
+        }
+    }
+
+    return $pattern;
+}
+
+function normalizeArticlePermalinkPolicy(mixed $policy): array
+{
+    $default = articlePermalinkDefaultPolicy();
+    if (! is_array($policy) || (int) ($policy['schema_version'] ?? 1) !== 1) {
+        return $default;
+    }
+
+    try {
+        $current = normalizeArticlePermalinkPattern((string) ($policy['current_pattern'] ?? $default['current_pattern']));
+        $history = [];
+        foreach ((array) ($policy['history'] ?? []) as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+            $historicalPattern = normalizeArticlePermalinkPattern((string) ($item['pattern'] ?? ''));
+            if ($historicalPattern === $current || isset($history[$historicalPattern])) {
+                continue;
+            }
+            $history[$historicalPattern] = [
+                'pattern' => $historicalPattern,
+                'retired_at' => (string) ($item['retired_at'] ?? ''),
+            ];
+        }
+
+        return [
+            'schema_version' => 1,
+            'revision' => max(0, (int) ($policy['revision'] ?? 0)),
+            'current_pattern' => $current,
+            'activated_at' => isset($policy['activated_at']) ? (string) $policy['activated_at'] : null,
+            'history' => array_values($history),
+        ];
+    } catch (Throwable) {
+        return $default;
+    }
+}
+
+function articlePermalinkPatterns(array $policy): array
+{
+    $patterns = [(string) $policy['current_pattern']];
+    foreach ((array) ($policy['history'] ?? []) as $item) {
+        if (is_array($item) && is_string($item['pattern'] ?? null)) {
+            $patterns[] = $item['pattern'];
+        }
+    }
+    $patterns[] = '/article/{slug}';
+
+    return array_values(array_unique($patterns));
+}
+
+function articlePermalinkTokens(string $pattern): array
+{
+    preg_match_all('/\{([a-z]+)\}/', $pattern, $matches);
+
+    return array_values($matches[1] ?? []);
+}
+
+function articlePermalinkValues(array $article, string $timezone = 'UTC'): array
+{
+    $date = null;
+    try {
+        $date = new DateTimeImmutable((string) ($article['created_at'] ?? $article['published_at'] ?? $article['updated_at'] ?? ''));
+        $date = $date->setTimezone(new DateTimeZone($timezone !== '' ? $timezone : 'UTC'));
+    } catch (Throwable) {
+        $date = null;
+    }
+
+    return [
+        'slug' => (string) ($article['slug'] ?? ''),
+        'id' => (string) ($article['id'] ?? ''),
+        'category' => articleCategorySlug($article),
+        'year' => $date?->format('Y') ?? '',
+        'month' => $date?->format('m') ?? '',
+        'day' => $date?->format('d') ?? '',
+    ];
+}
+
+function renderArticlePermalinkPattern(string $pattern, array $article, string $timezone = 'UTC'): string
+{
+    $pattern = normalizeArticlePermalinkPattern($pattern);
+    $values = articlePermalinkValues($article, $timezone);
+    foreach (articlePermalinkTokens($pattern) as $token) {
+        $value = trim((string) ($values[$token] ?? ''));
+        if ($value === '') {
+            throw new InvalidArgumentException('missing_article_permalink_value_'.$token);
+        }
+        if ($token === 'category'
+            && articlePermalinkUsesRootCategorySegment($pattern)
+            && isReservedArticlePermalinkFirstSegment($value)) {
+            throw new InvalidArgumentException('reserved_article_permalink_category');
+        }
+        $pattern = str_replace('{'.$token.'}', rawurlencode($value), $pattern);
+    }
+
+    return $pattern;
+}
+
+function articlePermalinkPath(array $config, array $article): string
+{
+    $settings = siteSettings($config);
+    $policy = normalizeArticlePermalinkPolicy($settings['article_permalink_policy'] ?? null);
+
+    return renderArticlePermalinkPattern(
+        (string) $policy['current_pattern'],
+        $article,
+        (string) ($config['timezone'] ?? 'UTC'),
+    );
+}
+
+function matchArticlePermalinkPattern(string $pattern, string $path): ?array
+{
+    try {
+        $pattern = normalizeArticlePermalinkPattern($pattern);
+    } catch (Throwable) {
+        return null;
+    }
+
+    $parts = preg_split('/(\{[a-z]+\})/', $pattern, -1, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_NO_EMPTY) ?: [];
+    $tokens = [];
+    $regex = '';
+    foreach ($parts as $part) {
+        if (preg_match('/^\{([a-z]+)\}$/', $part, $matches) === 1) {
+            $token = (string) $matches[1];
+            $tokens[] = $token;
+            $regex .= match ($token) {
+                'id' => '(?P<id>[1-9][0-9]*)',
+                'year' => '(?P<year>[0-9]{4})',
+                'month' => '(?P<month>0[1-9]|1[0-2])',
+                'day' => '(?P<day>0[1-9]|[12][0-9]|3[01])',
+                'slug' => '(?P<slug>[^/?#]+)',
+                'category' => '(?P<category>[^/?#]+)',
+            };
+        } else {
+            $regex .= preg_quote($part, '~');
+        }
+    }
+    if (preg_match('/%(?![0-9A-Fa-f]{2})/', $path) === 1 || preg_match('~\A'.$regex.'\z~Du', $path, $matches) !== 1) {
+        return null;
+    }
+
+    $values = [];
+    foreach ($tokens as $token) {
+        $value = rawurldecode((string) ($matches[$token] ?? ''));
+        if ($value === '' || ! mb_check_encoding($value, 'UTF-8') || preg_match('/[\x00-\x1F\x7F\\\\\/?#]/u', $value) === 1 || in_array($value, ['.', '..'], true)) {
+            return null;
+        }
+        if ($token === 'category'
+            && articlePermalinkUsesRootCategorySegment($pattern)
+            && isReservedArticlePermalinkFirstSegment($value)) {
+            return null;
+        }
+        $values[$token] = $value;
+    }
+
+    return $values;
 }
 
 function normalizeSiteSettings(array $settings, array $config = []): array
@@ -397,6 +1436,14 @@ function normalizeSiteSettings(array $settings, array $config = []): array
         'seo_description_template' => trim((string) ($settings['seo_description_template'] ?? $config['seo_description_template'] ?? '{description}')),
         'featured_limit' => min(100, max(1, (int) ($settings['featured_limit'] ?? $config['featured_limit'] ?? 6))),
         'per_page' => min(200, max(1, (int) ($settings['per_page'] ?? $config['per_page'] ?? 12))),
+        'article_permalink_policy' => normalizeArticlePermalinkPolicy($settings['article_permalink_policy'] ?? $config['article_permalink_policy'] ?? null),
+        'homepage_style' => normalizeHomepageStyle($settings['homepage_style'] ?? $config['homepage_style'] ?? []),
+        'homepage_modules' => normalizeHomepageModules($settings['homepage_modules'] ?? $config['homepage_modules'] ?? [], false),
+        'home_carousel_slides' => normalizeHomeCarouselSlides($settings['home_carousel_slides'] ?? $config['home_carousel_slides'] ?? []),
+        'frontend_experience_mode' => in_array((string) ($settings['frontend_experience_mode'] ?? $config['frontend_experience_mode'] ?? 'custom'), ['custom', 'inherit_default', 'snapshot_default'], true)
+            ? (string) ($settings['frontend_experience_mode'] ?? $config['frontend_experience_mode'] ?? 'custom')
+            : 'custom',
+        'article_text_ads' => normalizeArticleTextAds($settings['article_text_ads'] ?? $config['article_text_ads'] ?? []),
         'active_theme' => trim((string) ($settings['active_theme'] ?? $config['active_theme'] ?? '')),
         'front_mode' => $frontMode,
     ];
@@ -404,12 +1451,21 @@ function normalizeSiteSettings(array $settings, array $config = []): array
 
 function siteSettings(array $config): array
 {
+    if (is_array($config['_runtime_site_settings'] ?? null)) {
+        return normalizeSiteSettings($config['_runtime_site_settings'], $config);
+    }
+
     $settings = $config;
-    $settingsFile = siteSettingsFile($config);
-    if (is_file($settingsFile)) {
-        $decoded = json_decode((string) file_get_contents($settingsFile), true);
-        if (is_array($decoded)) {
-            $settings = array_merge($settings, $decoded);
+    $activeState = readActiveSiteState($config);
+    if (is_array($activeState)) {
+        $settings = array_merge($settings, (array) $activeState['settings']);
+    } else {
+        $settingsFile = siteSettingsFile($config);
+        if (is_file($settingsFile)) {
+            $decoded = json_decode((string) file_get_contents($settingsFile), true);
+            if (is_array($decoded)) {
+                $settings = array_merge($settings, $decoded);
+            }
         }
     }
 
@@ -703,6 +1759,67 @@ function articleContentHtml(array $article): string
     return markdownToHtml((string) ($article['content'] ?? ''), (string) ($article['title'] ?? ''));
 }
 
+function articleTextAdUrlWithTracking(string $url, bool $trackingEnabled, string $trackingParam): string
+{
+    if (! $trackingEnabled || $trackingParam === '') {
+        return $url;
+    }
+
+    $fragment = '';
+    $baseUrl = $url;
+    $hashPosition = strpos($url, '#');
+    if ($hashPosition !== false) {
+        $fragment = substr($url, $hashPosition);
+        $baseUrl = substr($url, 0, $hashPosition);
+    }
+
+    $separator = str_contains($baseUrl, '?')
+        ? (str_ends_with($baseUrl, '?') || str_ends_with($baseUrl, '&') ? '' : '&')
+        : '?';
+
+    return $baseUrl.$separator.$trackingParam.$fragment;
+}
+
+function renderArticleTextAds(array $settings, string $placement, int $limit = 2): string
+{
+    if (! in_array($placement, ['content_top', 'content_bottom'], true)) {
+        return '';
+    }
+
+    $ads = normalizeArticleTextAds($settings['article_text_ads'] ?? [], true);
+    $matched = array_values(array_filter(
+        $ads,
+        static fn (array $module): bool => ($module['placement'] ?? '') === $placement && ($module['links'] ?? []) !== []
+    ));
+
+    if ($matched === []) {
+        return '';
+    }
+
+    $placementClass = str_replace('_', '-', $placement);
+    $html = '<div class="article-text-ads article-text-ads--'.h($placementClass).'" data-placement="'.h($placement).'">';
+    foreach (array_slice($matched, 0, max(1, $limit)) as $module) {
+        $html .= '<div class="article-text-ad-module" data-module-id="'.h((string) $module['id']).'">';
+        foreach ((array) ($module['links'] ?? []) as $link) {
+            if (! is_array($link) || empty($link['enabled'])) {
+                continue;
+            }
+
+            $url = articleTextAdUrlWithTracking((string) $link['url'], (bool) $link['tracking_enabled'], (string) $link['tracking_param']);
+            $target = ! empty($link['open_new_tab']) ? ' target="_blank"' : '';
+            $style = '--article-text-ad-color: '.h((string) $link['text_color']).';';
+
+            $html .= '<a class="article-text-ad-link" href="'.h($url).'" rel="noopener sponsored nofollow"'.$target.' style="'.$style.'">';
+            $html .= '<span class="article-text-ad-text">'.h((string) $link['text']).'</span>';
+            $html .= '</a>';
+        }
+        $html .= '</div>';
+    }
+    $html .= '</div>';
+
+    return $html;
+}
+
 function keywordTags(string $keywords): array
 {
     $keywords = trim($keywords);
@@ -758,6 +1875,33 @@ function articleSummary(array $article, int $limit = 160): string
         : trim(strip_tags((string) ($article['content'] ?? '')));
 
     return mb_substr($plain, 0, $limit);
+}
+
+function articleMetaDescription(array $article, int $limit = 160): string
+{
+    $description = trim((string) ($article['meta_description'] ?? ''));
+    if ($description === '') {
+        $description = trim((string) ($article['excerpt'] ?? ''));
+    }
+    if ($description === '') {
+        $description = trim(strip_tags((string) ($article['content_html'] ?? '')));
+    }
+    if ($description === '') {
+        $description = trim(strip_tags((string) ($article['content'] ?? '')));
+    }
+    $description = preg_replace('/\s+/u', ' ', $description) ?: $description;
+
+    return mb_substr($description, 0, $limit);
+}
+
+function articleMetaKeywords(array $article): string
+{
+    $keywords = trim((string) ($article['keywords'] ?? ''));
+    if ($keywords === '') {
+        return '';
+    }
+
+    return implode(',', keywordTags($keywords));
 }
 
 function renderTemplateString(string $template, array $vars): string
@@ -889,7 +2033,7 @@ function staticSitePath(array $config, string $path): string
         return ($basePath !== '' ? $basePath : '').'/';
     }
 
-    return ($basePath !== '' ? $basePath : '').$path.'/';
+    return ($basePath !== '' ? $basePath : '').$path;
 }
 
 function frontSitePath(array $config, string $path): string
@@ -942,10 +2086,10 @@ function renderHomePageHtml(array $config, ?array $articles = null): string
     return (string) ob_get_clean();
 }
 
-function renderArticlePageHtml(array $config, array $article, ?array $allArticles = null): string
+function renderArticlePageHtml(array $config, string $slug): string
 {
     ob_start();
-    renderArticlePageBody($config, $article, (string) ($article['slug'] ?? ''), $allArticles);
+    renderArticlePage($config, $slug);
 
     return (string) ob_get_clean();
 }
@@ -960,169 +2104,452 @@ function writeStaticFile(array $config, string $relativePath, string $html): voi
     $file = staticRoot($config).'/'.$relativePath;
     $directory = dirname($file);
     if (! is_dir($directory) && ! mkdir($directory, 0755, true) && ! is_dir($directory)) {
-        jsonResponse(500, ['ok' => false, 'error' => 'static_directory_not_writable', 'path' => $relativePath]);
+        throw new RuntimeException('static_directory_not_writable');
     }
-    if (file_put_contents($file, $html) === false) {
-        jsonResponse(500, ['ok' => false, 'error' => 'static_file_not_writable', 'path' => $relativePath]);
-    }
+    writeAtomicFile($file, $html, 'static_file_not_writable');
 }
 
 function writeJsonFile(string $file, array $payload, string $error): void
 {
     $directory = dirname($file);
     if (! is_dir($directory) && ! mkdir($directory, 0755, true) && ! is_dir($directory)) {
-        jsonResponse(500, ['ok' => false, 'error' => $error]);
+        throw new RuntimeException($error);
     }
 
     $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
-    if (! is_string($json) || file_put_contents($file, $json) === false) {
-        jsonResponse(500, ['ok' => false, 'error' => $error]);
+    if (! is_string($json)) {
+        throw new RuntimeException($error);
+    }
+
+    writeAtomicFile($file, $json, $error);
+}
+
+function writeActiveSiteState(array $config, array $settings, array $manifest): void
+{
+    writeJsonFile(activeSiteStateFile($config), [
+        'schema_version' => 1,
+        'activated_at' => gmdate('c'),
+        'settings' => $settings,
+        'manifest' => $manifest,
+    ], 'active_site_state_not_writable');
+}
+
+function mirrorActiveSiteState(array $config, array $settings, array $manifest): void
+{
+    try {
+        writeJsonFile(siteSettingsFile($config), $settings, 'site_settings_not_writable');
+        writeJsonFile(staticManifestFile($config), $manifest, 'static_manifest_not_writable');
+    } catch (Throwable $exception) {
+        error_log('GEOFlow Agent compatibility state mirror failed: '.get_class($exception));
     }
 }
 
-function removeStaticArticle(array $config, string $slug): void
+function captureFileSnapshot(string $file): array
+{
+    if (! is_file($file)) {
+        return ['exists' => false, 'contents' => ''];
+    }
+
+    $contents = file_get_contents($file);
+    if (! is_string($contents)) {
+        throw new RuntimeException('static_file_snapshot_failed');
+    }
+
+    return ['exists' => true, 'contents' => $contents];
+}
+
+function restoreFileSnapshot(string $file, array $snapshot): void
+{
+    if (! (bool) ($snapshot['exists'] ?? false)) {
+        if (is_file($file)) {
+            @unlink($file);
+        }
+
+        return;
+    }
+
+    writeAtomicFile($file, (string) ($snapshot['contents'] ?? ''), 'static_file_restore_failed');
+}
+
+function writeAtomicFile(string $file, string $contents, string $error): void
+{
+    $directory = dirname($file);
+    if (! is_dir($directory) && ! mkdir($directory, 0755, true) && ! is_dir($directory)) {
+        throw new RuntimeException($error);
+    }
+
+    $temporary = $file.'.tmp-'.bin2hex(random_bytes(6));
+    if (file_put_contents($temporary, $contents, LOCK_EX) === false || ! rename($temporary, $file)) {
+        @unlink($temporary);
+        throw new RuntimeException($error);
+    }
+}
+
+function staticManifestFile(array $config): string
+{
+    return storageRoot($config).'/static-manifest.json';
+}
+
+function readStaticManifest(array $config): array
+{
+    $activeState = readActiveSiteState($config);
+    if (is_array($activeState) && is_array($activeState['manifest'] ?? null)) {
+        return $activeState['manifest'];
+    }
+
+    $file = staticManifestFile($config);
+    if (! is_file($file)) {
+        return ['schema_version' => 1, 'revision' => 0, 'entries' => []];
+    }
+
+    $manifest = json_decode((string) file_get_contents($file), true);
+
+    return is_array($manifest) && is_array($manifest['entries'] ?? null)
+        ? $manifest
+        : ['schema_version' => 1, 'revision' => 0, 'entries' => []];
+}
+
+function staticArticleCacheRelativePath(string $requestPath, int $revision): string
+{
+    return 'static-cache/r'.$revision.'/'.hash('sha256', $requestPath).'.html';
+}
+
+function writeStaticCacheFile(array $config, string $relativePath, string $html): void
+{
+    if (! str_starts_with($relativePath, 'static-cache/') || str_contains($relativePath, '..')) {
+        throw new RuntimeException('invalid_static_cache_path');
+    }
+
+    writeAtomicFile(storageRoot($config).'/'.$relativePath, $html, 'static_cache_not_writable');
+}
+
+function retireLegacyStaticArticle(array $config, string $slug): void
 {
     if ($slug === '') {
         return;
     }
 
-    $directory = staticRoot($config).'/article/'.safeFileName($slug);
-    $file = $directory.'/index.html';
-    if (is_file($file)) {
-        @unlink($file);
-    }
-    if (is_dir($directory)) {
-        @rmdir($directory);
-    }
-}
-
-function removeStaticDirectory(string $directory): void
-{
-    if (! is_dir($directory) || is_link($directory)) {
+    $legacyDirectory = staticRoot($config).'/article/'.safeFileName($slug);
+    $legacyFile = $legacyDirectory.'/index.html';
+    if (! is_file($legacyFile)) {
         return;
     }
 
-    $entries = scandir($directory);
-    if (! is_array($entries)) {
+    $retiredDirectory = storageRoot($config).'/retired-static';
+    if (! is_dir($retiredDirectory) && ! mkdir($retiredDirectory, 0755, true) && ! is_dir($retiredDirectory)) {
+        error_log('GEOFlow Agent could not create the retired static file directory.');
+
         return;
     }
 
-    foreach ($entries as $entry) {
-        if ($entry === '.' || $entry === '..') {
-            continue;
-        }
+    $retiredFile = $retiredDirectory.'/'.gmdate('YmdHis').'-'.safeFileName($slug).'-'.bin2hex(random_bytes(4)).'.html';
+    if (! @rename($legacyFile, $retiredFile)) {
+        error_log('GEOFlow Agent could not retire a legacy static article.');
 
-        $path = $directory.'/'.$entry;
-        if (is_dir($path) && ! is_link($path)) {
-            removeStaticDirectory($path);
-        } elseif (is_file($path) || is_link($path)) {
-            @unlink($path);
-        }
+        return;
     }
 
-    @rmdir($directory);
+    if (is_dir($legacyDirectory)) {
+        @rmdir($legacyDirectory);
+    }
 }
 
-function pruneStaticArticlePages(array $config, array $activeSlugs): int
+function pruneStaticCache(array $config, array $previousManifest, array $nextManifest): int
 {
-    $articleRoot = staticRoot($config).'/article';
-    if (! is_dir($articleRoot)) {
-        return 0;
-    }
-
-    $active = [];
-    foreach ($activeSlugs as $slug) {
-        $safeSlug = safeFileName((string) $slug);
-        if ($safeSlug !== '') {
-            $active[$safeSlug] = true;
-        }
-    }
-
-    $entries = scandir($articleRoot);
-    if (! is_array($entries)) {
-        return 0;
-    }
-
+    $nextFiles = array_fill_keys(array_values((array) ($nextManifest['entries'] ?? [])), true);
     $removed = 0;
-    foreach ($entries as $entry) {
-        if ($entry === '.' || $entry === '..' || isset($active[$entry])) {
+    foreach (array_values((array) ($previousManifest['entries'] ?? [])) as $relativePath) {
+        if (! is_string($relativePath) || isset($nextFiles[$relativePath]) || ! str_starts_with($relativePath, 'static-cache/')) {
             continue;
         }
-
-        $path = $articleRoot.'/'.$entry;
-        if (! is_dir($path) || is_link($path)) {
-            continue;
+        $file = storageRoot($config).'/'.$relativePath;
+        if (is_file($file) && @unlink($file)) {
+            $removed++;
         }
-
-        removeStaticDirectory($path);
-        $removed++;
     }
 
     return $removed;
 }
 
-function rebuildStaticSite(array $config, ?string $onlySlug = null): array
+function assertArticlePermalinkPathsUnambiguous(array $config, array $policy): void
 {
-    if (! staticPublishEnabled($config)) {
-        return ['enabled' => false, 'articles' => 0];
-    }
-
-    if ($onlySlug === null) {
-        // 全量重建（站点设置变更等低频操作）：全量读取渲染，并顺手重建摘要索引。
-        $articles = loadArticles($config);
-        writeArticleIndex($config, array_map('summarizeArticle', $articles));
-
-        writeStaticFile($config, 'index.html', renderHomePageHtml($config, $articles));
-        writeStaticFile($config, 'llms.txt', renderLlmsText($config, $articles));
-        writeStaticFile($config, 'sitemap.txt', renderSitemapText($config, $articles));
-
-        $count = 0;
-        $activeSlugs = [];
-        foreach ($articles as $article) {
-            $slug = (string) ($article['slug'] ?? '');
+    $articles = loadArticles($config);
+    $paths = [];
+    $articleIds = [];
+    $slugOwners = [];
+    $timezone = (string) ($config['timezone'] ?? 'UTC');
+    $patterns = articlePermalinkPatterns($policy);
+    foreach ($articles as $article) {
+        $articleId = (int) ($article['id'] ?? 0);
+        if ($articleId < 1) {
+            continue;
+        }
+        $articleIds[$articleId] = true;
+        $knownSlugs = array_values(array_unique([
+            (string) ($article['slug'] ?? ''),
+            ...array_values(array_filter(array_map('strval', (array) ($article['slug_history'] ?? [])))),
+        ]));
+        foreach ($knownSlugs as $slug) {
             if ($slug === '') {
                 continue;
             }
-            $activeSlugs[] = $slug;
-            writeStaticFile($config, 'article/'.safeFileName($slug).'/index.html', renderArticlePageHtml($config, $article, $articles));
-            $count++;
+            if (isset($slugOwners[$slug]) && $slugOwners[$slug] !== $articleId) {
+                throw new RuntimeException('article_permalink_slug_conflict');
+            }
+            $slugOwners[$slug] = $articleId;
         }
-        $removed = pruneStaticArticlePages($config, $activeSlugs);
-
-        return ['enabled' => true, 'articles' => $count, 'removed' => $removed];
-    }
-
-    // 增量重建（publish/update/delete）：只读摘要索引 + 当篇 JSON，读盘 O(1)，
-    // 仅重渲染当篇静态页与首页/llms/sitemap，其余文章页保持不变。
-    // 索引与文章 JSON 由同一 worker 在同一请求内写入，增量路径直接信任索引
-    // （当篇随后被合并/移除），计数校验只用于 GET 回退路径的自愈。
-    $summaries = articleSummaries($config, false);
-
-    $article = null;
-    $file = storageDir($config).'/'.safeFileName($onlySlug).'.json';
-    if (is_file($file)) {
-        $record = json_decode((string) file_get_contents($file), true);
-        if (is_array($record) && is_array($record['article'] ?? null)) {
-            $article = $record['article'];
+        foreach ($patterns as $pattern) {
+            $patternSlugs = in_array('slug', articlePermalinkTokens($pattern), true)
+                ? $knownSlugs
+                : [(string) ($article['slug'] ?? '')];
+            foreach ($patternSlugs as $slug) {
+                $pathArticle = $article;
+                $pathArticle['slug'] = $slug;
+                $path = renderArticlePermalinkPattern($pattern, $pathArticle, $timezone);
+                if (isset($paths[$path]) && $paths[$path] !== $articleId) {
+                    throw new RuntimeException('article_permalink_path_conflict');
+                }
+                $paths[$path] = $articleId;
+            }
         }
     }
 
-    $list = array_values(array_filter($summaries, fn (array $s): bool => (string) ($s['slug'] ?? '') !== $onlySlug));
-    if ($article !== null) {
-        $list[] = summarizeArticle($article);
+    foreach (array_keys($paths) as $path) {
+        $matchedArticleIds = [];
+        foreach ($patterns as $pattern) {
+            $values = matchArticlePermalinkPattern($pattern, $path);
+            if ($values === null) {
+                continue;
+            }
+            $articleId = isset($values['id'])
+                ? (int) $values['id']
+                : (int) ($slugOwners[(string) ($values['slug'] ?? '')] ?? 0);
+            if ($articleId > 0 && isset($articleIds[$articleId])) {
+                $matchedArticleIds[$articleId] = true;
+            }
+        }
+        if (count($matchedArticleIds) > 1) {
+            throw new RuntimeException('article_permalink_path_conflict');
+        }
     }
-    $list = sortArticleSummaries($list);
+}
 
-    writeStaticFile($config, 'index.html', renderHomePageHtml($config, $list));
-    writeStaticFile($config, 'llms.txt', renderLlmsText($config, $list));
-    writeStaticFile($config, 'sitemap.txt', renderSitemapText($config, $list));
-    if ($article !== null) {
-        writeStaticFile($config, 'article/'.safeFileName($onlySlug).'/index.html', renderArticlePageHtml($config, $article, $list));
+function rebuildStaticSite(array $config, ?array $settingsOverride = null, bool $activate = true, ?string $onlySlug = null): array
+{
+    $runtimeConfig = $config;
+    if ($settingsOverride !== null) {
+        $runtimeConfig['_runtime_site_settings'] = $settingsOverride;
     }
-    writeArticleIndex($config, $list);
-    $removed = pruneStaticArticlePages($config, array_map(fn (array $s): string => (string) ($s['slug'] ?? ''), $list));
+    $settings = siteSettings($runtimeConfig);
+    $policy = normalizeArticlePermalinkPolicy($settings['article_permalink_policy'] ?? null);
+    if (! staticPublishEnabled($runtimeConfig)) {
+        return ['enabled' => false, 'articles' => 0];
+    }
 
-    return ['enabled' => true, 'articles' => count($list), 'removed' => $removed];
+    $previousManifest = readStaticManifest($config);
+
+    // 增量重建（publish/update 指定 onlySlug）：只重渲染当篇静态页与首页/llms/sitemap，
+    // 读盘 O(1)（摘要索引 + 当篇 JSON），其余文章页缓存与 manifest 条目保持不变。
+    // 删除/文章缺失/manifest 不可用时自动回退全量重建。
+    $targetArticle = null;
+    if ($onlySlug !== null && is_array($previousManifest) && is_array($previousManifest['entries'] ?? null) && $previousManifest['entries'] !== []) {
+        $file = storageDir($runtimeConfig).'/'.safeFileName($onlySlug).'.json';
+        if (is_file($file)) {
+            $record = json_decode((string) file_get_contents($file), true);
+            if (is_array($record) && is_array($record['article'] ?? null)) {
+                $targetArticle = $record['article'];
+            }
+        }
+    }
+    if ($targetArticle !== null) {
+        $summaries = articleSummaries($config, false);
+        $list = array_values(array_filter($summaries, fn (array $s): bool => (string) ($s['slug'] ?? '') !== $onlySlug));
+        $list[] = summarizeArticle($targetArticle);
+        $list = sortArticleSummaries($list);
+
+        $requestPath = articlePermalinkPath($runtimeConfig, $targetArticle);
+        $cachePath = staticArticleCacheRelativePath($requestPath, (int) $policy['revision']);
+        $manifest = [
+            'schema_version' => 1,
+            'revision' => (int) $policy['revision'],
+            'pattern' => (string) $policy['current_pattern'],
+            'generated_at' => gmdate('c'),
+            'entries' => $previousManifest['entries'],
+        ];
+        $manifest['entries'][$requestPath] = $cachePath;
+        writeStaticCacheFile($config, $cachePath, renderArticlePageHtml($runtimeConfig, (string) $targetArticle['slug']));
+
+        $build = [
+            'enabled' => true,
+            'articles' => count($manifest['entries']),
+            'manifest_revision' => (int) $policy['revision'],
+            '_manifest' => $manifest,
+            '_previous_manifest' => $previousManifest,
+            '_home_html' => renderHomePageHtml($runtimeConfig, $list),
+            '_llms_text' => renderLlmsText($runtimeConfig, $list),
+            '_sitemap_text' => renderSitemapText($runtimeConfig, $list),
+            '_sitemap_xml' => renderSitemapXml($runtimeConfig, $list),
+            '_sitemap_shards' => [],
+            '_robots_text' => renderRobotsText($runtimeConfig),
+            '_article_slugs' => [(string) $targetArticle['slug']],
+        ];
+        $sitemapChunks = sitemapArticleChunks($runtimeConfig, $list);
+        foreach (array_keys($sitemapChunks) as $page) {
+            if ($page >= 2) {
+                $build['_sitemap_shards']['sitemaps/pages-'.$page.'.xml'] = renderSitemapShard($runtimeConfig, $page, $list);
+            }
+        }
+        writeArticleIndex($config, $list);
+        if (! $activate) {
+            return $build;
+        }
+
+        return activateStaticSiteBuild($config, $build);
+    }
+
+    // 全量重建（站点设置变更/删除/首次构建）：全量读取渲染，并重建摘要索引。
+    assertArticlePermalinkPathsUnambiguous($runtimeConfig, $policy);
+    $manifest = [
+        'schema_version' => 1,
+        'revision' => (int) $policy['revision'],
+        'pattern' => (string) $policy['current_pattern'],
+        'generated_at' => gmdate('c'),
+        'entries' => [],
+    ];
+    $homeHtml = renderHomePageHtml($runtimeConfig);
+    $llmsText = renderLlmsText($runtimeConfig);
+    $sitemapText = renderSitemapText($runtimeConfig);
+    $sitemapXml = renderSitemapXml($runtimeConfig);
+    $sitemapShards = [];
+    $sitemapChunks = sitemapArticleChunks($runtimeConfig);
+    foreach (array_keys($sitemapChunks) as $page) {
+        $sitemapShards['sitemaps/pages-'.$page.'.xml'] = renderSitemapShard($runtimeConfig, $page);
+    }
+    $robotsText = renderRobotsText($runtimeConfig);
+    $count = 0;
+    $allArticles = loadArticles($runtimeConfig);
+    writeArticleIndex($config, array_map('summarizeArticle', $allArticles));
+    foreach ($allArticles as $article) {
+        $slug = (string) ($article['slug'] ?? '');
+        if ($slug === '') {
+            continue;
+        }
+        $requestPath = articlePermalinkPath($runtimeConfig, $article);
+        $cachePath = staticArticleCacheRelativePath($requestPath, (int) $policy['revision']);
+        writeStaticCacheFile($config, $cachePath, renderArticlePageHtml($runtimeConfig, $slug));
+        $manifest['entries'][$requestPath] = $cachePath;
+        $count++;
+    }
+
+    $build = [
+        'enabled' => true,
+        'articles' => $count,
+        'manifest_revision' => (int) $policy['revision'],
+        '_manifest' => $manifest,
+        '_previous_manifest' => $previousManifest,
+        '_home_html' => $homeHtml,
+        '_llms_text' => $llmsText,
+        '_sitemap_text' => $sitemapText,
+        '_sitemap_xml' => $sitemapXml,
+        '_sitemap_shards' => $sitemapShards,
+        '_robots_text' => $robotsText,
+        '_article_slugs' => array_values(array_filter(array_map(
+            static fn (array $article): string => (string) ($article['slug'] ?? ''),
+            $allArticles,
+        ))),
+    ];
+    if (! $activate) {
+        return $build;
+    }
+
+    return activateStaticSiteBuild($config, $build);
+}
+
+function activateStaticSiteBuild(array $config, array $build, ?array $settingsOverride = null): array
+{
+    $settings = normalizeSiteSettings($settingsOverride ?? siteSettings($config), $config);
+    if (! (bool) ($build['enabled'] ?? false)) {
+        $manifest = readStaticManifest($config);
+        writeActiveSiteState($config, $settings, $manifest);
+        mirrorActiveSiteState($config, $settings, $manifest);
+
+        return ['enabled' => false, 'articles' => 0];
+    }
+
+    $publicFiles = [
+        staticRoot($config).'/index.html',
+        staticRoot($config).'/robots.txt',
+        staticRoot($config).'/llms.txt',
+        staticRoot($config).'/sitemap.txt',
+        staticRoot($config).'/sitemap.xml',
+    ];
+    $snapshots = [];
+    foreach ($publicFiles as $file) {
+        $snapshots[$file] = captureFileSnapshot($file);
+    }
+
+    $manifest = (array) ($build['_manifest'] ?? []);
+    try {
+        writeStaticFile($config, 'index.html', (string) ($build['_home_html'] ?? ''));
+        writeStaticFile($config, 'robots.txt', (string) ($build['_robots_text'] ?? ''));
+        writeStaticFile($config, 'llms.txt', (string) ($build['_llms_text'] ?? ''));
+        writeStaticFile($config, 'sitemap.txt', (string) ($build['_sitemap_text'] ?? ''));
+        writeStaticFile($config, 'sitemap.xml', (string) ($build['_sitemap_xml'] ?? ''));
+        foreach ((array) ($build['_sitemap_shards'] ?? []) as $relativePath => $content) {
+            writeStaticFile($config, (string) $relativePath, (string) $content);
+        }
+        writeActiveSiteState($config, $settings, $manifest);
+    } catch (Throwable $exception) {
+        foreach (array_reverse($publicFiles) as $file) {
+            try {
+                restoreFileSnapshot($file, $snapshots[$file]);
+            } catch (Throwable) {
+                // The original activation failure remains the actionable error.
+            }
+        }
+
+        throw $exception;
+    }
+
+    mirrorActiveSiteState($config, $settings, $manifest);
+    $removed = pruneStaticCache(
+        $config,
+        (array) ($build['_previous_manifest'] ?? []),
+        $manifest,
+    );
+    foreach ((array) ($build['_article_slugs'] ?? []) as $slug) {
+        retireLegacyStaticArticle($config, (string) $slug);
+    }
+
+    return [
+        'enabled' => true,
+        'articles' => (int) ($build['articles'] ?? 0),
+        'removed' => $removed,
+        'manifest_revision' => (int) ($build['manifest_revision'] ?? 0),
+    ];
+}
+
+function serveStaticArticle(array $config, string $requestPath): bool
+{
+    if (! staticPublishEnabled($config)) {
+        return false;
+    }
+
+    $manifest = readStaticManifest($config);
+    $relativePath = $manifest['entries'][$requestPath] ?? null;
+    if (! is_string($relativePath) || ! str_starts_with($relativePath, 'static-cache/') || str_contains($relativePath, '..')) {
+        return false;
+    }
+    $file = storageRoot($config).'/'.$relativePath;
+    if (! is_file($file)) {
+        return false;
+    }
+
+    http_response_code(200);
+    header('Content-Type: text/html; charset=utf-8');
+    readfile($file);
+
+    return true;
 }
 
 function ensureStorage(array $config): void
@@ -1185,16 +2612,6 @@ function localizeArticleAssets(array $config, array $article, array $assets): ar
         if (is_string($image['content_base64'] ?? null) && (string) $image['content_base64'] !== '') {
             $decoded = base64_decode((string) $image['content_base64'], true);
             $content = is_string($decoded) ? $decoded : '';
-            if ($content !== '' && strlen($content) > $maxBytes) {
-                $content = '';
-            }
-        } elseif (preg_match('~^https?://~i', $sourceUrl) === 1) {
-            $context = stream_context_create([
-                'http' => ['timeout' => 5, 'follow_location' => 1],
-                'https' => ['timeout' => 5, 'follow_location' => 1],
-            ]);
-            $remote = @file_get_contents($sourceUrl, false, $context, 0, $maxBytes + 1);
-            $content = is_string($remote) ? $remote : '';
             if ($content !== '' && strlen($content) > $maxBytes) {
                 $content = '';
             }
@@ -1312,7 +2729,7 @@ function findArticle(array $config, string $slug): ?array
 
 function articleIndexPath(array $config): string
 {
-    return storageRoot($config).'/articles-index.json';
+    return dirname(storageDir($config)).'/articles-index.json';
 }
 
 function summarizeArticle(array $article): array
@@ -1323,10 +2740,9 @@ function summarizeArticle(array $article): array
         '_plain_excerpt' => mb_substr(trim(strip_tags((string) ($article['content'] ?? ''))), 0, 300),
     ];
 
-    foreach (['title', 'published_at', 'updated_at', 'excerpt', 'meta_description'] as $key) {
-        $value = (string) ($article[$key] ?? '');
-        if (trim($value) !== '') {
-            $summary[$key] = $value;
+    foreach (['id', 'title', 'published_at', 'updated_at', 'excerpt', 'meta_description'] as $key) {
+        if (array_key_exists($key, $article) && trim((string) $article[$key]) !== '') {
+            $summary[$key] = $article[$key];
         }
     }
     if (is_array($article['category'] ?? null)) {
@@ -1385,6 +2801,84 @@ function articleSummaries(array $config, bool $verifyCount = true): array
     return $summaries;
 }
 
+function findArticleByPermalinkValues(array $config, array $values): ?array
+{
+    $id = isset($values['id']) ? (int) $values['id'] : null;
+    $slug = isset($values['slug']) ? (string) $values['slug'] : '';
+    foreach (loadArticles($config) as $article) {
+        if ($id !== null && (int) ($article['id'] ?? 0) === $id) {
+            return $article;
+        }
+        if ($id === null && $slug !== '' && (string) ($article['slug'] ?? '') === $slug) {
+            return $article;
+        }
+        if ($id === null && $slug !== '' && in_array($slug, (array) ($article['slug_history'] ?? []), true)) {
+            return $article;
+        }
+    }
+
+    return null;
+}
+
+function resolveArticlePermalink(array $config, string $path): ?array
+{
+    if (strlen($path) > 2048
+        || ! str_starts_with($path, '/')
+        || str_contains($path, '\\')
+        || str_contains($path, '//')
+        || preg_match('/%(?![0-9A-Fa-f]{2})/', $path) === 1
+        || preg_match('/%(?:2f|5c)/i', $path) === 1) {
+        return null;
+    }
+
+    $settings = siteSettings($config);
+    $policy = normalizeArticlePermalinkPolicy($settings['article_permalink_policy'] ?? null);
+    $matchingPath = $path !== '/' ? rtrim($path, '/') : $path;
+    $candidates = [];
+    $sources = [];
+    foreach (articlePermalinkPatterns($policy) as $position => $pattern) {
+        $values = matchArticlePermalinkPattern($pattern, $matchingPath);
+        if ($values === null) {
+            continue;
+        }
+        $article = findArticleByPermalinkValues($config, $values);
+        if (! is_array($article)) {
+            continue;
+        }
+        $articleId = (int) ($article['id'] ?? 0);
+        if ($articleId < 1) {
+            continue;
+        }
+        $candidates[$articleId] = $article;
+        $sources[$articleId] ??= $position === 0
+            ? 'current_permalink'
+            : ($pattern === '/article/{slug}' ? 'legacy_pattern' : 'retired_pattern');
+    }
+
+    if (count($candidates) !== 1) {
+        return null;
+    }
+
+    $articleId = (int) array_key_first($candidates);
+    $article = $candidates[$articleId];
+    try {
+        $canonicalPath = renderArticlePermalinkPattern(
+            (string) $policy['current_pattern'],
+            $article,
+            (string) ($config['timezone'] ?? 'UTC'),
+        );
+    } catch (Throwable) {
+        return null;
+    }
+
+    return [
+        'article' => $article,
+        'canonical_path' => $canonicalPath,
+        'is_canonical' => hash_equals($canonicalPath, $path),
+        'source' => (string) ($sources[$articleId] ?? 'current_permalink'),
+    ];
+}
+
 function articleCategoryName(array $article): string
 {
     return is_array($article['category'] ?? null) ? (string) ($article['category']['name'] ?? 'Insight') : 'Insight';
@@ -1406,32 +2900,71 @@ function articleDate(array $article, string $format = 'Y-m-d'): string
     return $timestamp ? date($format, $timestamp) : $date;
 }
 
-function pageHeader(array $config, string $title): void
+function pageSeoPayload(array $settings, string $title, array $pageMeta = []): array
+{
+    $siteName = (string) $settings['site_name'];
+    $hasMetaDescription = array_key_exists('description', $pageMeta);
+    $hasMetaKeywords = array_key_exists('keywords', $pageMeta);
+    $metaDescription = trim((string) ($pageMeta['description'] ?? ''));
+    $metaKeywords = trim((string) ($pageMeta['keywords'] ?? ''));
+    $canonicalUrl = trim((string) ($pageMeta['canonical_url'] ?? ''));
+    $ogType = trim((string) ($pageMeta['og_type'] ?? 'website'));
+    $isArticle = $ogType === 'article' || ! empty($pageMeta['article_page']);
+
+    $titleTemplate = (string) ($settings['seo_title_template'] ?? '{title} - {site_name}');
+    $descriptionTemplate = (string) ($settings['seo_description_template'] ?? '{description}');
+
+    $pageTitle = $isArticle
+        ? $title
+        : renderTemplateString($titleTemplate, [
+            'title' => $title,
+            'site_name' => $siteName,
+            'category' => '',
+        ]);
+
+    $description = $isArticle && $hasMetaDescription && $metaDescription !== ''
+        ? $metaDescription
+        : renderTemplateString($descriptionTemplate, [
+            'description' => $hasMetaDescription ? $metaDescription : (string) $settings['site_description'],
+            'site_name' => $siteName,
+            'keywords' => $hasMetaKeywords ? $metaKeywords : (string) $settings['site_keywords'],
+        ]);
+
+    return [
+        'page_title' => $pageTitle,
+        'description' => $description,
+        'keywords' => $hasMetaKeywords ? $metaKeywords : (string) $settings['site_keywords'],
+        'canonical_url' => $canonicalUrl,
+        'og_type' => $ogType,
+    ];
+}
+
+function pageHeader(array $config, string $title, array $pageMeta = []): void
 {
     $settings = siteSettings($config);
     $siteName = (string) $settings['site_name'];
     $themeClass = themeClass($settings);
     if ($themeClass === 'target-theme-apparel') {
-        apparelPageHeader($config, $settings, $title);
+        apparelPageHeader($config, $settings, $title, $pageMeta);
 
         return;
     }
-    $description = renderTemplateString((string) $settings['seo_description_template'], [
-        'description' => (string) $settings['site_description'],
-        'site_name' => $siteName,
-        'keywords' => (string) $settings['site_keywords'],
-    ]);
-    $pageTitle = renderTemplateString((string) $settings['seo_title_template'], [
-        'title' => $title,
-        'site_name' => $siteName,
-        'category' => '',
-    ]);
+    $seo = pageSeoPayload($settings, $title, $pageMeta);
     $homeUrl = frontSitePath($config, '/');
     echo '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">';
-    echo '<title>'.h($pageTitle).'</title><meta name="description" content="'.h($description).'">';
-    if ((string) $settings['site_keywords'] !== '') {
-        echo '<meta name="keywords" content="'.h((string) $settings['site_keywords']).'">';
+    echo '<title>'.h((string) $seo['page_title']).'</title><meta name="description" content="'.h((string) $seo['description']).'">';
+    $keywords = (string) $seo['keywords'];
+    if ($keywords !== '') {
+        echo '<meta name="keywords" content="'.h($keywords).'">';
     }
+    if ((string) $seo['canonical_url'] !== '') {
+        echo '<link rel="canonical" href="'.h((string) $seo['canonical_url']).'">';
+    }
+    echo '<meta property="og:title" content="'.h((string) $seo['page_title']).'"><meta property="og:description" content="'.h((string) $seo['description']).'"><meta property="og:type" content="'.h((string) $seo['og_type']).'">';
+    if ((string) $seo['canonical_url'] !== '') {
+        echo '<meta property="og:url" content="'.h((string) $seo['canonical_url']).'">';
+    }
+    echo '<meta property="og:site_name" content="'.h($siteName).'">';
     if ((string) $settings['site_favicon'] !== '') {
         echo '<link rel="icon" href="'.h((string) $settings['site_favicon']).'">';
     }
@@ -1452,24 +2985,27 @@ function pageFooter(array $config): void
     echo '</main><footer><div class="wrap">'.h((string) $settings['copyright_info']).'</div></footer></body></html>';
 }
 
-function apparelPageHeader(array $config, array $settings, string $title): void
+function apparelPageHeader(array $config, array $settings, string $title, array $pageMeta = []): void
 {
     $siteName = (string) $settings['site_name'];
-    $description = renderTemplateString((string) $settings['seo_description_template'], [
-        'description' => (string) $settings['site_description'],
-        'site_name' => $siteName,
-        'keywords' => (string) $settings['site_keywords'],
-    ]);
-    $pageTitle = renderTemplateString((string) $settings['seo_title_template'], [
-        'title' => $title,
-        'site_name' => $siteName,
-        'category' => '',
-    ]);
+    $seo = pageSeoPayload($settings, $title, $pageMeta);
     $homeUrl = frontSitePath($config, '/');
     echo '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">';
-    echo '<title>'.h($pageTitle).'</title><meta name="description" content="'.h($description).'">';
-    if ((string) $settings['site_keywords'] !== '') {
-        echo '<meta name="keywords" content="'.h((string) $settings['site_keywords']).'">';
+    echo '<title>'.h((string) $seo['page_title']).'</title><meta name="description" content="'.h((string) $seo['description']).'">';
+    $keywords = (string) $seo['keywords'];
+    if ($keywords !== '') {
+        echo '<meta name="keywords" content="'.h($keywords).'">';
+    }
+    if ((string) $seo['canonical_url'] !== '') {
+        echo '<link rel="canonical" href="'.h((string) $seo['canonical_url']).'">';
+    }
+    echo '<meta property="og:title" content="'.h((string) $seo['page_title']).'"><meta property="og:description" content="'.h((string) $seo['description']).'"><meta property="og:type" content="'.h((string) $seo['og_type']).'">';
+    if ((string) $seo['canonical_url'] !== '') {
+        echo '<meta property="og:url" content="'.h((string) $seo['canonical_url']).'">';
+    }
+    echo '<meta property="og:site_name" content="'.h($siteName).'">';
+    if ((string) $settings['site_favicon'] !== '') {
+        echo '<link rel="icon" href="'.h((string) $settings['site_favicon']).'">';
     }
     echo '<link rel="stylesheet" href="'.h(frontVersionedAssetPath($config, '/assets/css/site.css')).'">';
     echo '<script defer src="'.h(frontVersionedAssetPath($config, '/assets/js/site.js')).'"></script>';
@@ -1480,23 +3016,270 @@ function apparelPageHeader(array $config, array $settings, string $title): void
     echo '</nav></div></header><main class="wrap">';
 }
 
-function renderHomePage(array $config, ?array $articles = null): void
+function homepageHref(array $config, string $url): string
 {
-    $settings = siteSettings($config);
-    if (themeClass($settings) === 'target-theme-apparel') {
-        renderApparelHomePage($config, $settings, $articles);
+    $url = normalizeHomepageUrl($url, true);
+    if ($url === '') {
+        return '';
+    }
+
+    return str_starts_with($url, '/') ? frontSitePath($config, $url) : $url;
+}
+
+function homepageStyleAttribute(array $settings): string
+{
+    $style = normalizeHomepageStyle($settings['homepage_style'] ?? []);
+    $radius = match ($style['radius']) {
+        'none' => '0px',
+        'round' => '20px',
+        default => '8px',
+    };
+
+    return sprintf(
+        '--homepage-accent:%s;--homepage-bg:%s;--homepage-surface:%s;--homepage-text:%s;--homepage-muted:%s;--homepage-radius:%s',
+        $style['accent_color'],
+        $style['background_color'],
+        $style['surface_color'],
+        $style['text_color'],
+        $style['muted_color'],
+        $radius
+    );
+}
+
+function homepageModuleStyleAttribute(array $module): string
+{
+    $styles = [];
+    foreach ([
+        'accent_color' => '--module-accent',
+        'surface_color' => '--module-surface',
+        'text_color' => '--module-text',
+        'muted_color' => '--module-muted',
+    ] as $field => $variable) {
+        $color = normalizeHomepageHexColor((string) ($module[$field] ?? ''));
+        if ($color !== '') {
+            $styles[] = $variable.':'.$color;
+        }
+    }
+
+    return implode(';', $styles);
+}
+
+function homepageModuleRows(string $body): array
+{
+    $rows = [];
+    foreach (preg_split('/\r?\n/u', trim($body)) ?: [] as $line) {
+        $line = trim((string) $line);
+        if ($line === '') {
+            continue;
+        }
+
+        $rows[] = array_map(static fn (string $part): string => trim($part), explode('|', $line));
+    }
+
+    return $rows;
+}
+
+function homepageArticlePool(array $articles, string $source): array
+{
+    return array_values(array_filter($articles, static function (array $article) use ($source): bool {
+        if ($source === 'featured') {
+            return ! empty($article['is_featured']);
+        }
+        if ($source === 'hot') {
+            return ! empty($article['is_hot']);
+        }
+
+        return true;
+    }));
+}
+
+function renderHomepageModuleHeading(array $module, string $headingTag = 'h2'): void
+{
+    if ((string) $module['subtitle'] !== '') {
+        echo '<div class="module-kicker">'.h((string) $module['subtitle']).'</div>';
+    }
+    if ((string) $module['title'] !== '') {
+        echo '<'.$headingTag.'>'.h((string) $module['title']).'</'.$headingTag.'>';
+    }
+    if ((string) $module['body'] !== '' && ! in_array((string) $module['type'], ['metric_band', 'chart_band', 'feature_grid'], true)) {
+        echo '<p>'.nl2br(h((string) $module['body'])).'</p>';
+    }
+}
+
+function renderHomepageAction(array $config, array $module): void
+{
+    $url = homepageHref($config, (string) $module['link_url']);
+    $text = (string) $module['link_text'];
+    if ($url !== '' && $text !== '') {
+        echo '<a class="module-action" href="'.h($url).'">'.h($text).'</a>';
+    }
+}
+
+function renderHomepageArticleCard(array $config, array $article): void
+{
+    $slug = (string) ($article['slug'] ?? '');
+    if ($slug === '') {
+        return;
+    }
+
+    $title = (string) ($article['title'] ?? 'Untitled Article');
+    $url = frontSitePath($config, articlePermalinkPath($config, $article));
+    $summary = articleSummary($article, 120);
+    echo '<article class="homepage-article-card">';
+    echo '<h3><a href="'.h($url).'">'.h($title).'</a></h3>';
+    if ($summary !== '') {
+        echo '<p>'.h($summary).'</p>';
+    }
+    echo '</article>';
+}
+
+function renderHomepageModule(array $config, array $module, array $articles): void
+{
+    $type = (string) $module['type'];
+    $class = 'homepage-module homepage-'.$type.' align-'.(string) $module['alignment'];
+    $style = homepageModuleStyleAttribute($module);
+    echo '<section class="'.h($class).'"'.($style !== '' ? ' style="'.h($style).'"' : '').'>';
+
+    if ($type === 'image_band') {
+        echo '<div class="homepage-module-inner">';
+        if ((string) $module['image_url'] !== '') {
+            echo '<img src="'.h(homepageHref($config, (string) $module['image_url'])).'" alt="'.h((string) $module['title']).'">';
+        }
+        echo '<div class="module-copy">';
+        renderHomepageModuleHeading($module);
+        renderHomepageAction($config, $module);
+        echo '</div></div></section>';
 
         return;
     }
 
-    if (themeClass($settings) === 'target-theme-fashion') {
-        renderFashionHomePage($config, $settings, $articles);
+    echo '<div class="homepage-module-inner'.(((string) $module['layout']) === 'split' ? ' homepage-split' : '').'">';
+    echo '<div>';
+    renderHomepageModuleHeading($module, $type === 'hero' ? 'h1' : 'h2');
+    renderHomepageAction($config, $module);
+    echo '</div>';
+
+    if ($type === 'hero' && (string) $module['image_url'] !== '') {
+        echo '<div class="homepage-media"><img src="'.h(homepageHref($config, (string) $module['image_url'])).'" alt="'.h((string) $module['title']).'"></div>';
+    } elseif ($type === 'metric_band') {
+        echo '<div class="homepage-metrics">';
+        foreach (array_slice(homepageModuleRows((string) $module['body']), 0, 6) as $row) {
+            echo '<div class="metric-item"><span>'.h((string) ($row[0] ?? '')).'</span><strong>'.h((string) ($row[1] ?? '')).'</strong>';
+            if ((string) ($row[2] ?? '') !== '') {
+                echo '<span>'.h((string) $row[2]).'</span>';
+            }
+            echo '</div>';
+        }
+        echo '</div>';
+    } elseif ($type === 'chart_band') {
+        echo '<div class="homepage-chart-bars">';
+        foreach (array_slice(homepageModuleRows((string) $module['body']), 0, 8) as $row) {
+            $label = (string) ($row[0] ?? '');
+            $value = min(100, max(0, (int) ($row[1] ?? 0)));
+            echo '<div class="chart-row"><strong>'.h($label).'</strong><div class="chart-bar"><i style="--bar-width:'.$value.'%"></i></div><span>'.$value.'%</span></div>';
+        }
+        echo '</div>';
+    } elseif ($type === 'feature_grid') {
+        echo '<div class="homepage-features">';
+        foreach (array_slice(homepageModuleRows((string) $module['body']), 0, 9) as $row) {
+            $url = homepageHref($config, (string) ($row[2] ?? ''));
+            echo '<div class="feature-item"><h3>';
+            echo $url !== '' ? '<a href="'.h($url).'">'.h((string) ($row[0] ?? '')).'</a>' : h((string) ($row[0] ?? ''));
+            echo '</h3><p>'.h((string) ($row[1] ?? '')).'</p></div>';
+        }
+        echo '</div>';
+    } elseif ($type === 'article_collection') {
+        $pool = array_slice(homepageArticlePool($articles, (string) $module['data_source']), 0, (int) $module['limit']);
+        echo '<div class="homepage-article-grid">';
+        foreach ($pool as $article) {
+            renderHomepageArticleCard($config, $article);
+        }
+        echo '</div>';
+    } elseif ($type === 'custom_html') {
+        echo '<div class="homepage-custom-html">'.(string) $module['custom_html'].'</div>';
+    }
+
+    echo '</div></section>';
+}
+
+function renderHomeCarouselSlides(array $config, array $settings): bool
+{
+    $slides = array_values(array_filter(
+        normalizeHomeCarouselSlides($settings['home_carousel_slides'] ?? []),
+        static fn (array $slide): bool => ! empty($slide['enabled'])
+    ));
+    if ($slides === []) {
+        return false;
+    }
+
+    echo '<section class="homepage-carousel" style="'.h(homepageStyleAttribute($settings)).'"><div class="homepage-carousel-track">';
+    foreach ($slides as $slide) {
+        $imageUrl = homepageHref($config, (string) $slide['image_url']);
+        if ($imageUrl === '') {
+            continue;
+        }
+
+        $title = (string) $slide['title'];
+        $linkUrl = homepageHref($config, (string) $slide['link_url']);
+        echo '<article class="homepage-slide">';
+        echo $linkUrl !== '' ? '<a class="homepage-slide-media" href="'.h($linkUrl).'">' : '<div class="homepage-slide-media">';
+        echo '<img src="'.h($imageUrl).'" alt="'.h($title).'">';
+        echo $linkUrl !== '' ? '</a>' : '</div>';
+        if ($title !== '') {
+            echo '<div class="homepage-slide-copy">';
+            echo $linkUrl !== '' ? '<a href="'.h($linkUrl).'">'.h($title).'</a>' : h($title);
+            echo '</div>';
+        }
+        echo '</article>';
+    }
+    echo '</div></section>';
+
+    return true;
+}
+
+function renderHomepageModules(array $config, array $settings, array $articles): bool
+{
+    $modules = normalizeHomepageModules($settings['homepage_modules'] ?? [], true);
+    if ($modules === []) {
+        return false;
+    }
+
+    echo '<section class="homepage-modules" style="'.h(homepageStyleAttribute($settings)).'">';
+    foreach ($modules as $module) {
+        renderHomepageModule($config, $module, $articles);
+    }
+    echo '</section>';
+
+    return true;
+}
+
+function hasHomepageExperience(array $settings): bool
+{
+    $slides = array_values(array_filter(
+        normalizeHomeCarouselSlides($settings['home_carousel_slides'] ?? []),
+        static fn (array $slide): bool => ! empty($slide['enabled'])
+    ));
+
+    return $slides !== [] || normalizeHomepageModules($settings['homepage_modules'] ?? [], true) !== [];
+}
+
+function renderHomePage(array $config, ?array $allArticles = null): void
+{
+    $settings = siteSettings($config);
+    if (! hasHomepageExperience($settings) && themeClass($settings) === 'target-theme-apparel') {
+        renderApparelHomePage($config, $settings, $allArticles);
+
+        return;
+    }
+
+    if (! hasHomepageExperience($settings) && themeClass($settings) === 'target-theme-fashion') {
+        renderFashionHomePage($config, $settings, $allArticles);
 
         return;
     }
 
     $siteName = (string) $settings['site_name'];
-    $articles = array_slice($articles ?? articleSummaries($config), 0, (int) $settings['per_page']);
+    $articles = array_slice($allArticles ?? articleSummaries($config), 0, (int) $settings['per_page']);
     pageHeader($config, '首页');
     echo jsonLdScript([
         "@context"=>"https://schema.org",
@@ -1505,7 +3288,11 @@ function renderHomePage(array $config, ?array $articles = null): void
         "url"=>frontSiteUrl($config, '/'),
         "description"=>(string) $settings['site_description'],
     ]);
-    echo '<section class="hero"><h1>'.h($siteName).'</h1><p>'.h((string) $settings['site_description']).'</p></section>';
+    $hasCarouselSlides = renderHomeCarouselSlides($config, $settings);
+    $hasHomepageModules = renderHomepageModules($config, $settings, $articles);
+    if (! $hasCarouselSlides && ! $hasHomepageModules) {
+        echo '<section class="hero"><h1>'.h($siteName).'</h1><p>'.h((string) $settings['site_description']).'</p></section>';
+    }
     if ($articles === []) {
         echo '<div class="card empty">暂无文章。请先从 GEOFlow 发布一篇绑定此渠道的文章。</div>';
         pageFooter($config);
@@ -1519,7 +3306,7 @@ function renderHomePage(array $config, ?array $articles = null): void
         $category = is_array($article['category'] ?? null) ? (string) ($article['category']['name'] ?? '默认分类') : '默认分类';
         $publishedAt = substr((string) ($article['published_at'] ?? $article['updated_at'] ?? ''), 0, 10);
         $summary = (string) ($article['excerpt'] ?? $article['meta_description'] ?? '');
-        $articleUrl = frontSitePath($config, '/article/'.rawurlencode($slug));
+        $articleUrl = frontSitePath($config, articlePermalinkPath($config, $article));
         echo '<article class="card"><div class="meta"><span class="chip">'.h($category).'</span><span>'.h($publishedAt).'</span></div>';
         echo '<h2><a href="'.h($articleUrl).'">'.h($title).'</a></h2>';
         echo '<p class="summary">'.h($summary !== '' ? $summary : mb_substr((string) ($article['_plain_excerpt'] ?? strip_tags((string) ($article['content'] ?? ''))), 0, 160)).'</p>';
@@ -1548,7 +3335,7 @@ function renderApparelHomePage(array $config, array $settings, ?array $allArticl
     echo '<div class="asi-shell asi-page">';
 
     if ($lead) {
-        $leadUrl = frontSitePath($config, '/article/'.rawurlencode((string) ($lead['slug'] ?? '')));
+        $leadUrl = frontSitePath($config, articlePermalinkPath($config, $lead));
         echo '<section class="asi-hero"><article class="asi-lead">';
         renderApparelVisual($config, $lead, 'asi-lead-visual', articleCategoryName($lead));
         echo '<div class="asi-lead-copy"><div class="asi-kicker">Lead Analysis</div><h1><a href="'.h($leadUrl).'">'.h((string) ($lead['title'] ?? 'Untitled Article')).'</a></h1>';
@@ -1556,7 +3343,7 @@ function renderApparelHomePage(array $config, array $settings, ?array $allArticl
         echo '<aside class="asi-hero-rail"><section class="asi-briefing"><span>Today\'s Briefing</span><strong>'.h((string) ($settings['site_subtitle'] ?: 'Buyers are rebalancing sourcing maps as cost, speed and compliance collide.')).'</strong><div><small>Daily market note</small><small>'.h(date('H:i T')).'</small></div></section>';
         echo '<section class="asi-headline-stack">';
         foreach ($headlines as $headline) {
-            $url = frontSitePath($config, '/article/'.rawurlencode((string) ($headline['slug'] ?? '')));
+            $url = frontSitePath($config, articlePermalinkPath($config, $headline));
             echo '<article class="asi-mini-story">';
             renderApparelVisual($config, $headline, 'asi-mini-visual');
             echo '<div><h2><a href="'.h($url).'">'.h((string) ($headline['title'] ?? 'Untitled Article')).'</a></h2><div class="asi-meta"><span>'.h(articleCategoryName($headline)).'</span><time>'.h(articleDate($headline, 'M j')).'</time></div></div></article>';
@@ -1582,7 +3369,7 @@ function renderApparelHomePage(array $config, array $settings, ?array $allArticl
 
 function renderApparelVisual(array $config, array $article, string $class, string $badge = ''): void
 {
-    $url = frontSitePath($config, '/article/'.rawurlencode((string) ($article['slug'] ?? '')));
+    $url = frontSitePath($config, articlePermalinkPath($config, $article));
     $title = (string) ($article['title'] ?? 'Untitled Article');
     $image = articleImageUrl($article);
     $initial = mb_strtoupper(mb_substr(articleCategoryName($article), 0, 1));
@@ -1600,7 +3387,7 @@ function renderApparelVisual(array $config, array $article, string $class, strin
 
 function renderApparelArticleCard(array $config, array $article): void
 {
-    $url = frontSitePath($config, '/article/'.rawurlencode((string) ($article['slug'] ?? '')));
+    $url = frontSitePath($config, articlePermalinkPath($config, $article));
     echo '<article class="asi-card">';
     renderApparelVisual($config, $article, 'asi-card-visual');
     echo '<div class="asi-card-copy"><div class="asi-meta"><span>'.h(articleCategoryName($article)).'</span><time>'.h(articleDate($article, 'M j, Y')).'</time></div>';
@@ -1620,7 +3407,7 @@ function renderApparelSidebar(array $config, array $settings, array $articles): 
     }
     echo '</section><section class="asi-panel"><div class="asi-panel-head"><h2>Editor Picks</h2></div><div class="asi-rank-list">';
     foreach (array_slice($articles, 0, 6) as $index => $article) {
-        $url = frontSitePath($config, '/article/'.rawurlencode((string) ($article['slug'] ?? '')));
+        $url = frontSitePath($config, articlePermalinkPath($config, $article));
         echo '<a class="asi-rank-item" href="'.h($url).'"><span>'.($index + 1).'</span><strong>'.h((string) ($article['title'] ?? 'Untitled Article')).'</strong></a>';
     }
     echo '</div></section></aside>';
@@ -1660,7 +3447,7 @@ function renderFashionHomePage(array $config, array $settings, ?array $allArticl
     if ($featured !== []) {
         echo '<section class="fashion-section"><div class="fashion-section-head"><h2>Vanguard Choice</h2><span>Curated Highlights</span></div>';
         $first = $featured[0];
-        $firstUrl = frontSitePath($config, '/article/'.rawurlencode((string) ($first['slug'] ?? '')));
+        $firstUrl = frontSitePath($config, articlePermalinkPath($config, $first));
         $firstImage = articleImageUrl($first);
         echo '<div class="fashion-feature-grid"><article class="fashion-feature-card">';
         if ($firstImage !== '') {
@@ -1671,7 +3458,7 @@ function renderFashionHomePage(array $config, array $settings, ?array $allArticl
         echo '<p>'.h(articleSummary($first, 220)).'</p><div><time>'.h(substr((string) ($first['published_at'] ?? $first['updated_at'] ?? ''), 0, 10)).'</time><a href="'.h($firstUrl).'">Read Analysis</a></div></div></article>';
         echo '<div class="fashion-feature-side">';
         foreach (array_slice($featured, 1, 2) as $item) {
-            $url = frontSitePath($config, '/article/'.rawurlencode((string) ($item['slug'] ?? '')));
+            $url = frontSitePath($config, articlePermalinkPath($config, $item));
             $category = is_array($item['category'] ?? null) ? (string) ($item['category']['name'] ?? 'Insight') : 'Insight';
             echo '<article><div><span>'.h($category).'</span><time>'.h(substr((string) ($item['published_at'] ?? $item['updated_at'] ?? ''), 0, 10)).'</time></div>';
             echo '<h3><a href="'.h($url).'">'.h((string) ($item['title'] ?? 'Untitled Article')).'</a></h3><p>'.h(articleSummary($item, 120)).'</p><a href="'.h($url).'">Read Report</a></article>';
@@ -1693,7 +3480,7 @@ function renderFashionHomePage(array $config, array $settings, ?array $allArticl
 function renderFashionArticleCard(array $config, array $article): void
 {
     $slug = (string) ($article['slug'] ?? '');
-    $url = frontSitePath($config, '/article/'.rawurlencode($slug));
+    $url = frontSitePath($config, articlePermalinkPath($config, $article));
     $title = (string) ($article['title'] ?? 'Untitled Article');
     $image = articleImageUrl($article);
     $category = is_array($article['category'] ?? null) ? (string) ($article['category']['name'] ?? 'Insight') : 'Insight';
@@ -1724,30 +3511,33 @@ function renderArticlePage(array $config, string $slug): void
         return;
     }
 
-    renderArticlePageBody($config, $article, $slug);
-}
-
-function renderArticlePageBody(array $config, array $article, string $slug, ?array $allArticles = null): void
-{
     $title = (string) ($article['title'] ?? '未命名文章');
     $category = is_array($article['category'] ?? null) ? (string) ($article['category']['name'] ?? '默认分类') : '默认分类';
     $publishedAt = substr((string) ($article['published_at'] ?? $article['updated_at'] ?? ''), 0, 10);
-    pageHeader($config, $title);
+    $settings = siteSettings($config);
+    $articleUrl = frontSiteUrl($config, articlePermalinkPath($config, $article));
+    $articleDescription = articleMetaDescription($article);
+    pageHeader($config, $title, [
+        'description' => $articleDescription,
+        'keywords' => articleMetaKeywords($article),
+        'canonical_url' => $articleUrl,
+        'og_type' => 'article',
+    ]);
     echo jsonLdScript([
         "@context"=>"https://schema.org",
         "@type"=>"Article",
         "headline"=>$title,
-        "description"=>(string) ($article['meta_description'] ?? $article['excerpt'] ?? ''),
+        "description"=>$articleDescription,
         "datePublished"=>(string) ($article['published_at'] ?? ''),
         "dateModified"=>(string) ($article['updated_at'] ?? ''),
-        "mainEntityOfPage"=>frontSiteUrl($config, '/article/'.rawurlencode($slug)),
+        "mainEntityOfPage"=>$articleUrl,
         "author"=>[
             "@type"=>"Person",
             "name"=>is_array($article['author'] ?? null) ? (string) ($article['author']['name'] ?? 'GEOFlow') : 'GEOFlow',
         ],
         "publisher"=>[
             "@type"=>"Organization",
-            "name"=>(string) siteSettings($config)['site_name'],
+            "name"=>(string) $settings['site_name'],
         ],
     ]);
     echo jsonLdScript([
@@ -1755,10 +3545,10 @@ function renderArticlePageBody(array $config, array $article, string $slug, ?arr
         "@type"=>"BreadcrumbList",
         "itemListElement"=>[
             ["@type"=>"ListItem", "position"=>1, "name"=>"首页", "item"=>frontSiteUrl($config, '/')],
-            ["@type"=>"ListItem", "position"=>2, "name"=>$title, "item"=>frontSiteUrl($config, '/article/'.rawurlencode($slug))],
+            ["@type"=>"ListItem", "position"=>2, "name"=>$title, "item"=>$articleUrl],
         ],
     ]);
-    $themeClass = themeClass(siteSettings($config));
+    $themeClass = themeClass($settings);
     $isFashion = $themeClass === 'target-theme-fashion';
     $isApparel = $themeClass === 'target-theme-apparel';
     echo $isApparel ? '<div class="asi-shell asi-article-layout"><main class="asi-article-column"><nav class="asi-breadcrumb"><a href="'.h(frontSitePath($config, '/')).'">Latest</a><span>/</span><span>'.h($category).'</span></nav>' : '';
@@ -1786,7 +3576,7 @@ function renderArticlePageBody(array $config, array $article, string $slug, ?arr
         echo '</header>';
         renderApparelVisual($config, $article, 'asi-article-visual');
     }
-    echo '<div class="'.($isApparel ? 'asi-prose content' : 'content').'">'.articleContentHtml($article).'</div>';
+    echo '<div class="'.($isApparel ? 'asi-prose content' : 'content').'">'.renderArticleTextAds($settings, 'content_top').articleContentHtml($article).renderArticleTextAds($settings, 'content_bottom').'</div>';
     $tags = keywordTags((string) ($article['keywords'] ?? ''));
     if ($tags !== []) {
         echo '<div class="tags">';
@@ -1798,7 +3588,7 @@ function renderArticlePageBody(array $config, array $article, string $slug, ?arr
     echo '</article>';
     if ($isApparel) {
         echo '</main>';
-        renderApparelSidebar($config, siteSettings($config), $allArticles ?? articleSummaries($config));
+        renderApparelSidebar($config, $settings, articleSummaries($config));
         echo '</div>';
     }
     pageFooter($config);
@@ -1810,6 +3600,22 @@ function textMapLine(string $value): string
     $value = preg_replace('/\s+/u', ' ', $value);
 
     return trim(is_string($value) ? $value : '');
+}
+
+function textMapLinkLabel(string $value): string
+{
+    return str_replace(['\\', '[', ']'], ['\\\\', '\\[', '\\]'], textMapLine($value));
+}
+
+function articleIsoDate(array $article, string $field): string
+{
+    $value = trim((string) ($article[$field] ?? ''));
+    if ($value === '') {
+        return '';
+    }
+    $timestamp = strtotime($value);
+
+    return $timestamp === false ? '' : gmdate('c', $timestamp);
 }
 
 function renderLlmsText(array $config, ?array $articles = null): string
@@ -1828,8 +3634,9 @@ function renderLlmsText(array $config, ?array $articles = null): string
 
     $lines[] = '## Site';
     $lines[] = '';
-    $lines[] = '- Home: '.frontSiteUrl($config, '/');
-    $lines[] = '- Sitemap: '.frontSiteUrl($config, '/sitemap.txt');
+    $lines[] = '- [Home]('.frontSiteUrl($config, '/').'): The public site homepage.';
+    $lines[] = '- [XML Sitemap]('.frontSiteUrl($config, '/sitemap.xml').'): Canonical URLs and verified last modification timestamps for search engines.';
+    $lines[] = '- [Text Sitemap]('.frontSiteUrl($config, '/sitemap.txt').'): One canonical URL per line for simple sitemap consumers.';
     $lines[] = '';
     $lines[] = '## Articles';
     $lines[] = '';
@@ -1848,9 +3655,14 @@ function renderLlmsText(array $config, ?array $articles = null): string
             if ($summary === '') {
                 $summary = textMapLine(mb_substr((string) ($article['_plain_excerpt'] ?? strip_tags((string) ($article['content'] ?? ''))), 0, 180));
             }
-            $line = '- '.($title !== '' ? $title : $slug).' - '.frontSiteUrl($config, '/article/'.rawurlencode($slug));
-            if ($summary !== '') {
-                $line .= ' - '.$summary;
+            $notes = array_values(array_filter([
+                $summary,
+                ($published = articleIsoDate($article, 'published_at')) !== '' ? 'Published: '.$published : null,
+                ($updated = articleIsoDate($article, 'updated_at')) !== '' ? 'Updated: '.$updated : null,
+            ]));
+            $line = '- ['.textMapLinkLabel($title !== '' ? $title : $slug).']('.frontSiteUrl($config, articlePermalinkPath($config, $article)).')';
+            if ($notes !== []) {
+                $line .= ': '.implode(' ', $notes);
             }
             $lines[] = $line;
         }
@@ -1859,17 +3671,173 @@ function renderLlmsText(array $config, ?array $articles = null): string
     return rtrim(implode("\n", $lines))."\n";
 }
 
+function renderRobotsText(array $config): string
+{
+    $sitemapXml = frontSiteUrl($config, '/sitemap.xml');
+    $sitemapText = frontSiteUrl($config, '/sitemap.txt');
+    $lines = [
+        'User-agent: *',
+        'Allow: /',
+    ];
+    foreach (robotsBlockedPaths() as $path) {
+        $lines[] = 'Disallow: '.$path;
+    }
+    foreach (['facebookexternalhit', 'Facebot', 'facebookcatalog'] as $userAgent) {
+        $lines[] = '';
+        $lines[] = 'User-agent: '.$userAgent;
+        $lines[] = 'Disallow: /';
+    }
+    $lines[] = '';
+    $lines[] = 'Sitemap: '.$sitemapXml;
+    $lines[] = 'Sitemap: '.$sitemapText;
+
+    return implode("\n", $lines)."\n";
+}
+
+function robotsBlockedPaths(): array
+{
+    return [
+        '/admin/',
+        '/api/',
+        '/app',
+        '/broadcasting/',
+        '/config.php',
+        '/horizon/',
+        '/livewire/',
+        '/sanctum/',
+        '/storage/',
+        '/up',
+        '/vendor/',
+        '/_boost/',
+        '/_debugbar/',
+        '/search',
+        '/search/',
+        '/query',
+        '/query/',
+        '/find',
+        '/find/',
+        '/*?*',
+        '/*.avif$',
+        '/*.gif$',
+        '/*.jpeg$',
+        '/*.jpg$',
+        '/*.png$',
+        '/*.svg$',
+        '/*.webp$',
+    ];
+}
+
 function renderSitemapText(array $config, ?array $articles = null): string
 {
-    $urls = [frontSiteUrl($config, '/')];
+    $lines = [trim((string) $config['site_name']).' 文章清单'];
     foreach ($articles ?? articleSummaries($config) as $article) {
         $slug = (string) ($article['slug'] ?? '');
         if ($slug !== '') {
-            $urls[] = frontSiteUrl($config, '/article/'.rawurlencode($slug));
+            $urls[] = frontSiteUrl($config, articlePermalinkPath($config, $article));
         }
     }
 
     return implode("\n", array_values(array_unique($urls)))."\n";
+}
+
+function renderSitemapXml(array $config, ?array $articles = null): string
+{
+    $chunks = sitemapArticleChunks($config, 5000, null, $articles);
+    if (count($chunks) > 1) {
+        $lines = [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+        ];
+        foreach (array_keys($chunks) as $page) {
+            $loc = htmlspecialchars(
+                frontSiteUrl($config, '/sitemaps/pages-'.$page.'.xml'),
+                ENT_XML1 | ENT_QUOTES,
+                'UTF-8',
+            );
+            $lines[] = '  <sitemap><loc>'.$loc.'</loc></sitemap>';
+        }
+        $lines[] = '</sitemapindex>';
+
+        return implode("\n", $lines)."\n";
+    }
+
+    $urls = [['loc' => frontSiteUrl($config, '/'), 'lastmod' => '']];
+    foreach ($chunks[1] ?? [] as $article) {
+        $slug = (string) ($article['slug'] ?? '');
+        if ($slug !== '') {
+            $urls[] = [
+                'loc' => frontSiteUrl($config, articlePermalinkPath($config, $article)),
+                'lastmod' => articleIsoDate($article, 'updated_at'),
+            ];
+        }
+    }
+
+    return renderSitemapUrlSet($urls);
+}
+
+function publicSitemapUrlLimit(): int
+{
+    return 50000;
+}
+
+/** @return array<int, array<int, array<string, mixed>>> */
+function sitemapArticleChunks(array $config, ?array $articles = null): array
+{
+    $articles = $articles ?? articleSummaries($config);
+    $firstPageLimit = publicSitemapUrlLimit() - 1;
+    if (count($articles) <= $firstPageLimit) {
+        return [1 => $articles];
+    }
+
+    $chunks = [1 => array_slice($articles, 0, $firstPageLimit)];
+    foreach (array_chunk(array_slice($articles, $firstPageLimit), publicSitemapUrlLimit(), true) as $page => $chunk) {
+        $chunks[$page + 2] = $chunk;
+    }
+
+    return $chunks;
+}
+
+function renderSitemapShard(array $config, int $page, ?array $articles = null): ?string
+{
+    $chunks = sitemapArticleChunks($config, $articles);
+    if (! isset($chunks[$page])) {
+        return null;
+    }
+
+    $urls = [];
+    if ($page === 1) {
+        $urls[] = ['loc' => frontSiteUrl($config, '/'), 'lastmod' => ''];
+    }
+    foreach ($chunks[$page] as $article) {
+        $slug = (string) ($article['slug'] ?? '');
+        if ($slug !== '') {
+            $urls[] = [
+                'loc' => frontSiteUrl($config, articlePermalinkPath($config, $article)),
+                'lastmod' => articleIsoDate($article, 'updated_at'),
+            ];
+        }
+    }
+
+    return renderSitemapUrlSet($urls);
+}
+
+/** @param list<array{loc:string,lastmod:string}> $urls */
+function renderSitemapUrlSet(array $urls): string
+{
+    $lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    ];
+    foreach ($urls as $url) {
+        $loc = htmlspecialchars((string) $url['loc'], ENT_XML1 | ENT_QUOTES, 'UTF-8');
+        $lastmod = (string) ($url['lastmod'] ?? '');
+        $lines[] = '  <url><loc>'.$loc.'</loc>'.($lastmod !== ''
+            ? '<lastmod>'.htmlspecialchars($lastmod, ENT_XML1 | ENT_QUOTES, 'UTF-8').'</lastmod>'
+            : '').'</url>';
+    }
+    $lines[] = '</urlset>';
+
+    return implode("\n", $lines)."\n";
 }
 
 function handleHealth(array $config, string $method, string $path, string $body): void
@@ -1883,6 +3851,64 @@ function handleHealth(array $config, string $method, string $path, string $body)
     ]);
 }
 
+function handleFrontendCapabilities(array $config, string $method, string $path, string $body): void
+{
+    $verified = verifySignedRequest($config, $method, $path, $body);
+    if (! in_array($verified['event'], ['frontend.capabilities', 'health.check'], true)) {
+        jsonResponse(422, ['ok' => false, 'error' => 'unsupported_event']);
+    }
+
+    $settings = siteSettings($config);
+    $homepageModules = normalizeHomepageModules($settings['homepage_modules'] ?? [], false);
+    $homepageStyle = normalizeHomepageStyle($settings['homepage_style'] ?? []);
+    $carouselSlides = normalizeHomeCarouselSlides($settings['home_carousel_slides'] ?? []);
+    $articleTextAds = normalizeArticleTextAds($settings['article_text_ads'] ?? [], false);
+    jsonResponse(200, [
+        'ok' => true,
+        'service' => 'geoflow-target-site',
+        'capability_version' => '1.3',
+        'package_version' => (string) ($config['package_version'] ?? ''),
+        'event' => $verified['event'],
+        'active_theme' => activeTheme($settings),
+        'front_mode' => (string) $settings['front_mode'],
+        'frontend_experience_mode' => (string) $settings['frontend_experience_mode'],
+        'current_settings' => [
+            'active_theme' => activeTheme($settings),
+            'front_mode' => (string) $settings['front_mode'],
+            'frontend_experience_mode' => (string) $settings['frontend_experience_mode'],
+            'homepage_modules_count' => count($homepageModules),
+            'homepage_module_types' => array_values(array_unique(array_map(static fn (array $module): string => (string) ($module['type'] ?? ''), $homepageModules))),
+            'home_carousel_slides_count' => count($carouselSlides),
+            'article_text_ads_count' => count($articleTextAds),
+            'homepage_style_keys' => array_keys($homepageStyle),
+            'article_permalink_revision' => (int) ($settings['article_permalink_policy']['revision'] ?? 0),
+            'article_permalink_pattern' => (string) ($settings['article_permalink_policy']['current_pattern'] ?? '/article/{slug}'),
+        ],
+        'supported_modules' => frontendSupportedModules(),
+        'supported_routes' => [
+            '/',
+            '{article_permalink_policy}',
+            '/article/{slug}',
+            '/robots.txt',
+            '/llms.txt',
+            '/sitemap.txt',
+            '/sitemap.xml',
+            '/sitemaps/pages-{page}.xml',
+            '/geoflow-agent/v1/health',
+            '/geoflow-agent/v1/site-settings',
+            '/geoflow-agent/v1/frontend-capabilities',
+        ],
+        'supports_homepage_style' => true,
+        'supports_home_carousel_slides' => true,
+        'supports_article_text_ads' => true,
+        'supports_article_permalink_policy' => true,
+        'article_permalink_schema_versions' => [1],
+        'current_article_permalink_revision' => (int) ($settings['article_permalink_policy']['revision'] ?? 0),
+        'current_article_permalink_pattern' => (string) ($settings['article_permalink_policy']['current_pattern'] ?? '/article/{slug}'),
+        'supports_static_generation' => ! empty($config['static_publish_enabled']),
+    ]);
+}
+
 function handleIndexRebuild(array $config, string $method, string $path, string $body): void
 {
     $verified = verifySignedRequest($config, $method, $path, $body);
@@ -1890,6 +3916,7 @@ function handleIndexRebuild(array $config, string $method, string $path, string 
         jsonResponse(422, ['ok' => false, 'error' => 'unsupported_event']);
     }
 
+    ensureStorage($config);
     $summaries = array_map('summarizeArticle', loadArticles($config));
     writeArticleIndex($config, $summaries);
 
@@ -1915,7 +3942,7 @@ function handleArticlePublish(array $config, string $method, string $path, strin
     $response = [
         'ok' => true,
         'remote_id' => 'geoflow-'.$slug,
-        'remote_url' => frontSiteUrl($config, '/article/'.rawurlencode($slug)),
+        'remote_url' => frontSiteUrl($config, articlePermalinkPath($config, $article)),
     ];
 
     writeJsonFile($file, [
@@ -1925,7 +3952,7 @@ function handleArticlePublish(array $config, string $method, string $path, strin
         'response' => $response,
     ], 'article_storage_not_writable');
 
-    $response['static'] = rebuildStaticSite($config, $slug);
+    $response['static'] = rebuildStaticSite($config, null, true, $slug);
 
     jsonResponse(200, $response);
 }
@@ -1949,12 +3976,19 @@ function handleArticleUpdate(array $config, string $method, string $path, string
         jsonResponse(422, ['ok' => false, 'error' => 'missing_slug']);
     }
 
+    $previousArticle = findArticle($config, $pathSlug);
+    $slugHistory = is_array($previousArticle['slug_history'] ?? null) ? $previousArticle['slug_history'] : [];
+    if ($pathSlug !== '' && $pathSlug !== $slug) {
+        $slugHistory[] = $pathSlug;
+    }
+    $article['slug_history'] = array_values(array_unique(array_filter(array_map('strval', $slugHistory))));
+
     $file = storageDir($config).'/'.safeFileName($slug).'.json';
     $response = [
         'ok' => true,
         'updated' => true,
         'remote_id' => 'geoflow-'.$slug,
-        'remote_url' => frontSiteUrl($config, '/article/'.rawurlencode($slug)),
+        'remote_url' => frontSiteUrl($config, articlePermalinkPath($config, $article)),
     ];
 
     writeJsonFile($file, [
@@ -1964,7 +3998,17 @@ function handleArticleUpdate(array $config, string $method, string $path, string
         'response' => $response,
     ], 'article_storage_not_writable');
 
-    $response['static'] = rebuildStaticSite($config, $slug);
+    if ($pathSlug !== '' && $pathSlug !== $slug) {
+        $previousFile = storageDir($config).'/'.safeFileName($pathSlug).'.json';
+        if (is_file($previousFile)) {
+            @unlink($previousFile);
+        }
+    }
+
+    $response['static'] = rebuildStaticSite($config, null, true, $slug);
+    if ($pathSlug !== '' && $pathSlug !== $slug) {
+        retireLegacyStaticArticle($config, $pathSlug);
+    }
 
     jsonResponse(200, $response);
 }
@@ -1988,8 +4032,8 @@ function handleArticleDelete(array $config, string $method, string $path, string
     if (is_file($file)) {
         @unlink($file);
     }
-    removeStaticArticle($config, $slug);
-    $static = rebuildStaticSite($config, $slug);
+    $static = rebuildStaticSite($config);
+    retireLegacyStaticArticle($config, $slug);
 
     jsonResponse(200, [
         'ok' => true,
@@ -2011,29 +4055,85 @@ function handleSiteSettingsUpdate(array $config, string $method, string $path, s
         jsonResponse(422, ['ok' => false, 'error' => 'invalid_settings_payload']);
     }
 
+    $incomingPolicy = $payload['settings']['article_permalink_policy'] ?? null;
+    if (is_array($incomingPolicy)) {
+        try {
+            if ((int) ($incomingPolicy['schema_version'] ?? 1) !== 1) {
+                throw new InvalidArgumentException('unsupported_article_permalink_schema');
+            }
+            normalizeArticlePermalinkPattern((string) ($incomingPolicy['current_pattern'] ?? ''));
+            foreach ((array) ($incomingPolicy['history'] ?? []) as $historyItem) {
+                if (! is_array($historyItem)) {
+                    throw new InvalidArgumentException('invalid_article_permalink_history');
+                }
+                normalizeArticlePermalinkPattern((string) ($historyItem['pattern'] ?? ''));
+            }
+        } catch (Throwable) {
+            jsonResponse(422, ['ok' => false, 'error' => 'invalid_article_permalink_policy']);
+        }
+    }
+
     ensureStorage($config);
+    $currentSettings = siteSettings($config);
+    $currentPolicy = normalizeArticlePermalinkPolicy($currentSettings['article_permalink_policy'] ?? null);
     $settings = normalizeSiteSettings($payload['settings'], $config);
-    writeJsonFile(siteSettingsFile($config), $settings, 'site_settings_not_writable');
-    $static = rebuildStaticSite($config);
+    $nextPolicy = normalizeArticlePermalinkPolicy($settings['article_permalink_policy'] ?? null);
+    $expectedRevision = isset($payload['expected_article_permalink_revision'])
+        ? (int) $payload['expected_article_permalink_revision']
+        : (int) $currentPolicy['revision'];
+    if ($expectedRevision !== (int) $currentPolicy['revision']) {
+        jsonResponse(409, [
+            'ok' => false,
+            'error' => 'article_permalink_revision_conflict',
+            'current_article_permalink_revision' => (int) $currentPolicy['revision'],
+        ]);
+    }
+    if ((int) $nextPolicy['revision'] < (int) $currentPolicy['revision']
+        || ((int) $nextPolicy['revision'] === (int) $currentPolicy['revision']
+            && (string) $nextPolicy['current_pattern'] !== (string) $currentPolicy['current_pattern'])) {
+        jsonResponse(409, [
+            'ok' => false,
+            'error' => 'stale_article_permalink_policy',
+            'current_article_permalink_revision' => (int) $currentPolicy['revision'],
+        ]);
+    }
+
+    try {
+        $staticBuild = rebuildStaticSite($config, $settings, false);
+        $static = activateStaticSiteBuild($config, $staticBuild, $settings);
+    } catch (Throwable $exception) {
+        jsonResponse(500, [
+            'ok' => false,
+            'error' => 'site_settings_activation_failed',
+            'message' => $exception->getMessage(),
+        ]);
+    }
 
     jsonResponse(200, [
         'ok' => true,
         'updated' => true,
         'site_name' => $settings['site_name'],
         'active_theme' => $settings['active_theme'],
+        'article_permalink_revision' => (int) $nextPolicy['revision'],
+        'article_permalink_pattern' => (string) $nextPolicy['current_pattern'],
         'static' => $static,
     ]);
 }
 
 $method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
-$path = parse_url((string) ($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH);
-$path = is_string($path) && $path !== '' ? rtrim($path, '/') : '/';
+$rawRequestPath = parse_url((string) ($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH);
+$rawRequestPath = is_string($rawRequestPath) && $rawRequestPath !== '' ? $rawRequestPath : '/';
+$requestHadTrailingSlash = $rawRequestPath !== '/' && str_ends_with($rawRequestPath, '/');
+$path = rtrim($rawRequestPath, '/') ?: '/';
 $path = normalizeRequestPath($config, $path === '' ? '/' : $path);
 $body = file_get_contents('php://input');
 $body = is_string($body) ? $body : '';
 
 if ($method === 'GET' && $path === '/geoflow-agent/v1/health') {
     handleHealth($config, $method, $path, $body);
+}
+if ($method === 'GET' && $path === '/geoflow-agent/v1/frontend-capabilities') {
+    handleFrontendCapabilities($config, $method, $path, $body);
 }
 if ($method === 'POST' && $path === '/geoflow-agent/v1/articles') {
     handleArticlePublish($config, $method, $path, $body);
@@ -2056,15 +4156,53 @@ if ($method === 'GET' && $path === '/') {
     renderHomePage($config);
     exit;
 }
+if ($method === 'GET' && $path === '/robots.txt') {
+    textResponse(renderRobotsText($config));
+}
 if ($method === 'GET' && $path === '/llms.txt') {
     textResponse(renderLlmsText($config));
 }
 if ($method === 'GET' && $path === '/sitemap.txt') {
     textResponse(renderSitemapText($config));
 }
-if ($method === 'GET' && str_starts_with($path, '/article/')) {
-    renderArticlePage($config, rawurldecode(substr($path, 9)));
-    exit;
+if ($method === 'GET' && $path === '/sitemap.xml') {
+    xmlResponse(renderSitemapXml($config));
+}
+if ($method === 'GET' && preg_match('#^/sitemaps/pages-([1-9][0-9]*)\.xml$#', $path, $matches) === 1) {
+    $sitemap = renderSitemapShard($config, (int) $matches[1]);
+    if ($sitemap === null) {
+        xmlResponse('', 404);
+    }
+    xmlResponse($sitemap);
+}
+if (in_array($method, ['GET', 'HEAD'], true)) {
+    $resolution = resolveArticlePermalink($config, $path);
+    if (is_array($resolution)) {
+        $canonicalPath = (string) $resolution['canonical_path'];
+        if (! (bool) $resolution['is_canonical'] || $requestHadTrailingSlash) {
+            $query = parse_url((string) ($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_QUERY);
+            $target = frontSitePath($config, $canonicalPath);
+            if (is_string($query) && $query !== '') {
+                $target .= '?'.$query;
+            }
+            http_response_code(301);
+            header('Cache-Control: public, max-age=3600, s-maxage=300');
+            header('Location: '.$target);
+            exit;
+        }
+
+        if ($method === 'HEAD') {
+            ob_start();
+            renderArticlePage($config, (string) ($resolution['article']['slug'] ?? ''));
+            ob_end_clean();
+            exit;
+        }
+        if (serveStaticArticle($config, $canonicalPath)) {
+            exit;
+        }
+        renderArticlePage($config, (string) ($resolution['article']['slug'] ?? ''));
+        exit;
+    }
 }
 
 http_response_code(404);

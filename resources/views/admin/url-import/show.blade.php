@@ -33,13 +33,13 @@
         data-status="{{ $job->status }}"
         data-has-result="{{ $result !== [] ? '1' : '0' }}"
         data-autostart="{{ $job->status === 'queued' ? '1' : '0' }}"
-        data-run-url="{{ route('admin.url-import.run', ['jobId' => $job->id], false) }}"
-        data-status-url="{{ route('admin.url-import.status', ['jobId' => $job->id], false) }}"
+        data-run-url="{{ \App\Support\AdminWeb::routePath('admin.url-import.run', ['jobId' => $job->id]) }}"
+        data-status-url="{{ \App\Support\AdminWeb::routePath('admin.url-import.status', ['jobId' => $job->id]) }}"
         data-ai-config-url="{{ route('admin.ai-models.index') }}"
     >
         <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div class="flex items-start gap-4">
-                <a href="{{ route('admin.url-import') }}" class="mt-1 text-gray-400 hover:text-gray-600">
+                <a href="{{ route('admin.url-import') }}" aria-label="{{ __('admin.common.back') }}" class="mt-1 text-gray-400 hover:text-gray-600">
                     <i data-lucide="arrow-left" class="w-5 h-5"></i>
                 </a>
                 <div>
@@ -58,18 +58,6 @@
                 </a>
             </div>
         </div>
-
-        @if (session('message'))
-            <div class="rounded-xl border border-green-200 bg-green-50 px-5 py-4 text-sm font-medium text-green-700">
-                {{ session('message') }}
-            </div>
-        @endif
-
-        @if ($errors->any())
-            <div class="rounded-xl border border-red-200 bg-red-50 px-5 py-4 text-sm font-medium text-red-700">
-                {{ $errors->first() }}
-            </div>
-        @endif
 
         <div class="hidden rounded-xl border border-red-200 bg-red-50 px-5 py-4 text-sm font-medium text-red-700" data-runtime-error></div>
         <div class="hidden rounded-xl border border-blue-200 bg-blue-50 px-5 py-4 text-sm font-medium text-blue-800" data-runtime-notice></div>

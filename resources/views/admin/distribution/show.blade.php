@@ -1,68 +1,165 @@
 @extends('admin.layouts.app')
 
-@php($channelStatusKey = 'admin.distribution.status.'.(string) $channel->status)
-@php($channelStatusLabel = trans()->has($channelStatusKey) ? __($channelStatusKey) : (string) $channel->status)
-@php($healthStatus = (string) ($channel->last_health_status ?? ''))
-@php($healthStatusKey = 'admin.distribution.health_status.'.$healthStatus)
-@php($healthStatusLabel = $healthStatus !== '' && trans()->has($healthStatusKey) ? __($healthStatusKey) : ($healthStatus !== '' ? $healthStatus : __('admin.common.none')))
-@php($canRevealSecret = auth('admin')->user() instanceof \App\Models\Admin && auth('admin')->user()->isSuperAdmin())
-@php($channelType = $channel->channelType())
-@php($channelTypeLabel = __('admin.distribution.channel_type.'.$channelType))
-@php($channelConfig = $channel->resolvedChannelConfig())
-@php($healthCheckUrl = $channel->isWordPressRest() ? $channel->wordpressRestBaseUrl().'/wp/v2/users/me?context=edit' : rtrim((string) $channel->endpoint_url, '/').'/geoflow-agent/v1/health')
-@php($indexAgentBaseUrl = str_ends_with(rtrim((string) $channel->endpoint_url, '/'), '/index.php') ? rtrim((string) $channel->endpoint_url, '/') : rtrim((string) $channel->endpoint_url, '/').'/index.php')
-@php($indexHealthCheckUrl = $indexAgentBaseUrl.'/geoflow-agent/v1/health')
+@php
+    $channelStatusKey = 'admin.distribution.status.'.(string) $channel->status;
+    $channelStatusLabel = trans()->has($channelStatusKey) ? __($channelStatusKey) : (string) $channel->status;
+    $healthStatus = (string) ($channel->last_health_status ?? '');
+    $healthStatusKey = 'admin.distribution.health_status.'.$healthStatus;
+    $healthStatusLabel = $healthStatus !== '' && trans()->has($healthStatusKey) ? __($healthStatusKey) : ($healthStatus !== '' ? $healthStatus : __('admin.common.none'));
+    $canRevealSecret = auth('admin')->user() instanceof \App\Models\Admin && auth('admin')->user()->isSuperAdmin();
+    $canDeleteChannel = $canRevealSecret;
+    $channelType = $channel->channelType();
+    $channelTypeLabel = __('admin.distribution.channel_type.'.$channelType);
+    $channelConfig = $channel->resolvedChannelConfig();
+    $genericConfig = $channel->resolvedGenericHttpConfig();
+    $articleTextAdPolicy = \App\Models\DistributionChannel::normalizeArticleTextAdPolicy($articleTextAdPolicy ?? $channel->resolvedArticleTextAdPolicy());
+    $effectiveArticleTextAds = is_array($effectiveArticleTextAds ?? null) ? $effectiveArticleTextAds : $channel->effectiveArticleTextAds();
+    $frontendExperienceReport = is_array($frontendExperienceReport ?? null) ? $frontendExperienceReport : [];
+    $frontendPreview = is_array($frontendExperienceReport['sync_preview'] ?? null) ? $frontendExperienceReport['sync_preview'] : [];
+    $frontendSummary = is_array($frontendPreview['summary'] ?? null) ? $frontendPreview['summary'] : [];
+    $remoteTarget = is_array($frontendExperienceReport['remote_target'] ?? null) ? $frontendExperienceReport['remote_target'] : [];
+    $remoteStatus = (string) ($remoteTarget['status'] ?? 'not_checked');
+    $remoteStatusCopy = [
+        'ok' => ['label' => '已检查', 'class' => 'border-emerald-200 bg-emerald-50 text-emerald-800'],
+        'not_checked' => ['label' => '未检查', 'class' => 'border-gray-200 bg-gray-50 text-gray-700'],
+        'missing_secret' => ['label' => '缺少密钥', 'class' => 'border-amber-200 bg-amber-50 text-amber-800'],
+        'unsupported_or_not_found' => ['label' => '旧包或未暴露', 'class' => 'border-amber-200 bg-amber-50 text-amber-800'],
+        'unavailable' => ['label' => '不可达', 'class' => 'border-red-200 bg-red-50 text-red-800'],
+        'not_applicable' => ['label' => '不适用', 'class' => 'border-gray-200 bg-gray-50 text-gray-700'],
+    ][$remoteStatus] ?? ['label' => $remoteStatus, 'class' => 'border-gray-200 bg-gray-50 text-gray-700'];
+    $articleTextAdCounts = ['content_top' => 0, 'content_bottom' => 0];
+    foreach ($effectiveArticleTextAds as $textAd) {
+        $placement = (string) ($textAd['placement'] ?? '');
+        if (array_key_exists($placement, $articleTextAdCounts)) {
+            $articleTextAdCounts[$placement]++;
+        }
+    }
+    $genericSamplePayload = [
+        'version' => '1.0',
+        'source' => 'geoflow',
+        'event' => 'article.publish',
+        'article' => [
+            'id' => 123,
+            'title' => 'Article title',
+            'slug' => 'article-slug',
+            'content_format' => 'markdown',
+            'content' => 'Markdown content',
+            'content_html' => '<p>HTML content</p>',
+            'category' => ['name' => 'Category', 'slug' => 'category'],
+            'author' => ['name' => 'Author'],
+        ],
+        'assets' => ['images' => []],
+    ];
+    $healthCheckUrl = rtrim((string) $channel->endpoint_url, '/').'/geoflow-agent/v1/health';
+    if ($channel->isWordPressRest()) {
+        $healthCheckUrl = $channel->wordpressRestBaseUrl().'/wp/v2/users/me?context=edit';
+    } elseif ($channel->isGenericHttpApi()) {
+        $genericHealthPath = strtr((string) $genericConfig['generic_health_path'], ['{channel_id}' => (string) $channel->id]);
+        $healthCheckUrl = rtrim((string) $channel->endpoint_url, '/').(str_starts_with($genericHealthPath, '/') ? $genericHealthPath : '/'.$genericHealthPath);
+    }
+    $indexAgentBaseUrl = str_ends_with(rtrim((string) $channel->endpoint_url, '/'), '/index.php') ? rtrim((string) $channel->endpoint_url, '/') : rtrim((string) $channel->endpoint_url, '/').'/index.php';
+    $indexHealthCheckUrl = $indexAgentBaseUrl.'/geoflow-agent/v1/health';
+@endphp
 
 @section('content')
     <div class="space-y-8 px-4 sm:px-0">
-        <div class="flex items-center justify-between">
-            <div class="flex items-center space-x-4">
-                <a href="{{ route('admin.distribution.index') }}" class="text-gray-400 hover:text-gray-600">
+        <header class="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+            <div class="flex min-w-0 items-start gap-3 sm:gap-4">
+                <a href="{{ route('admin.distribution.index') }}" aria-label="{{ __('admin.common.back') }}" class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-gray-400 transition-[background-color,color,transform] duration-150 [@media(hover:hover)]:hover:bg-white [@media(hover:hover)]:hover:text-gray-700 active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600">
                     <i data-lucide="arrow-left" class="h-5 w-5"></i>
                 </a>
-                <div>
-                    <h1 class="text-2xl font-bold text-gray-900">{{ $channel->name }}</h1>
-                    <p class="mt-1 text-sm text-gray-600">{{ $channel->domain }}</p>
+                <div class="min-w-0">
+                    <h1 class="break-words text-2xl font-bold text-gray-900">{{ $channel->name }}</h1>
+                    <p class="mt-1 break-all text-sm leading-6 text-gray-600">{{ $channel->domain }}</p>
                 </div>
             </div>
-            <div class="flex flex-wrap items-center justify-end gap-3">
-                <a href="{{ route('admin.distribution.edit', ['channelId' => (int) $channel->id]) }}" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
-                    <i data-lucide="pencil" class="mr-2 h-4 w-4"></i>
-                    {{ __('admin.button.edit') }}
-                </a>
-                <form method="POST" action="{{ $channel->status === 'active' ? route('admin.distribution.pause', ['channelId' => (int) $channel->id]) : route('admin.distribution.activate', ['channelId' => (int) $channel->id]) }}">
-                    @csrf
-                    <button type="submit" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
-                        <i data-lucide="{{ $channel->status === 'active' ? 'pause-circle' : 'play-circle' }}" class="mr-2 h-4 w-4"></i>
-                        {{ $channel->status === 'active' ? __('admin.distribution.button.pause') : __('admin.distribution.button.activate') }}
-                    </button>
-                </form>
-                @if ($channel->isGeoFlowAgent())
-                    <form method="POST" action="{{ route('admin.distribution.rotate-secret', ['channelId' => (int) $channel->id]) }}" onsubmit="return confirm('{{ __('admin.distribution.confirm.rotate_secret') }}')">
+            <div class="flex shrink-0 flex-wrap items-center gap-2 lg:justify-end">
+                @if ($channel->status === \App\Models\DistributionChannel::STATUS_DELETING)
+                    @if ($canDeleteChannel)
+                        <a href="{{ route('admin.distribution.delete', ['channelId' => (int) $channel->id]) }}" class="inline-flex min-h-10 items-center gap-2 rounded-md border border-amber-600 bg-amber-600 px-4 text-sm font-semibold text-white transition-[background-color,border-color,transform] duration-150 [@media(hover:hover)]:hover:border-amber-700 [@media(hover:hover)]:hover:bg-amber-700 active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-600">
+                            <i data-lucide="shield-alert" class="h-4 w-4"></i>
+                            {{ __('admin.distribution.delete.button.continue') }}
+                        </a>
+                    @endif
+                @else
+                    <a href="{{ route('admin.distribution.edit', ['channelId' => (int) $channel->id]) }}" class="inline-flex min-h-10 items-center gap-2 rounded-md border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 transition-[background-color,border-color,transform] duration-150 [@media(hover:hover)]:hover:border-gray-400 [@media(hover:hover)]:hover:bg-gray-50 active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600">
+                        <i data-lucide="pencil" class="h-4 w-4"></i>
+                        {{ __('admin.button.edit') }}
+                    </a>
+                    <form
+                        method="POST"
+                        action="{{ $channel->status === 'active' ? route('admin.distribution.pause', ['channelId' => (int) $channel->id]) : route('admin.distribution.activate', ['channelId' => (int) $channel->id]) }}"
+                        data-admin-confirm-form
+                        data-admin-confirm-tone="{{ $channel->status === 'active' ? 'warning' : 'success' }}"
+                        data-admin-confirm-title="{{ $channel->status === 'active' ? __('admin.distribution.button.pause') : __('admin.distribution.button.activate') }} “{{ $channel->name }}”"
+                        data-admin-confirm-message="{{ __('admin.action_dialog.generic_impact') }}"
+                        data-admin-confirm-guidance="{{ $healthStatus !== '' ? $healthStatusLabel : __('admin.common.none') }}"
+                        data-admin-confirm-label="{{ $channel->status === 'active' ? __('admin.distribution.button.pause') : __('admin.distribution.button.activate') }}"
+                    >
                         @csrf
-                        <button type="submit" class="inline-flex items-center rounded-md border border-amber-300 bg-white px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-50">
-                            <i data-lucide="refresh-cw" class="mr-2 h-4 w-4"></i>
-                            {{ __('admin.distribution.button.rotate_secret') }}
+                        <button type="submit" class="inline-flex min-h-10 items-center gap-2 rounded-md border border-blue-600 bg-blue-600 px-4 text-sm font-medium text-white transition-[background-color,border-color,transform] duration-150 [@media(hover:hover)]:hover:border-blue-700 [@media(hover:hover)]:hover:bg-blue-700 active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600" data-admin-confirm-submit disabled aria-disabled="true">
+                            <i data-lucide="{{ $channel->status === 'active' ? 'pause-circle' : 'play-circle' }}" class="h-4 w-4"></i>
+                            {{ $channel->status === 'active' ? __('admin.distribution.button.pause') : __('admin.distribution.button.activate') }}
                         </button>
                     </form>
+                    <details class="relative">
+                        <summary class="inline-flex min-h-10 cursor-pointer list-none items-center gap-2 rounded-md border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 transition-[background-color,border-color,transform] duration-150 marker:content-none [@media(hover:hover)]:hover:border-gray-400 [@media(hover:hover)]:hover:bg-gray-50 active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 [&::-webkit-details-marker]:hidden">
+                            <i data-lucide="ellipsis" class="h-4 w-4"></i>
+                            {{ __('admin.common.actions') }}
+                            <i data-lucide="chevron-down" class="h-4 w-4 text-gray-400"></i>
+                        </summary>
+                        <div class="absolute right-0 top-[calc(100%+8px)] z-20 grid w-56 gap-1 rounded-lg border border-gray-200 bg-white p-2 shadow-lg">
+                            <form method="POST" action="{{ route('admin.distribution.health', ['channelId' => (int) $channel->id]) }}">
+                                @csrf
+                                <button type="submit" class="inline-flex min-h-10 w-full items-center gap-2 rounded-md px-3 text-left text-sm font-medium text-gray-700 transition-[background-color,transform] duration-150 [@media(hover:hover)]:hover:bg-gray-50 active:scale-[0.98]">
+                                    <i data-lucide="activity" class="h-4 w-4"></i>
+                                    {{ __('admin.distribution.button.health') }}
+                                </button>
+                            </form>
+                            @if ($channel->isGeoFlowAgent())
+                                <form method="POST" action="{{ route('admin.distribution.frontend-capabilities.refresh', ['channelId' => (int) $channel->id]) }}">
+                                    @csrf
+                                    <button type="submit" class="inline-flex min-h-10 w-full items-center gap-2 rounded-md px-3 text-left text-sm font-medium text-gray-700 transition-[background-color,transform] duration-150 [@media(hover:hover)]:hover:bg-gray-50 active:scale-[0.98]">
+                                        <i data-lucide="radar" class="h-4 w-4"></i>
+                                        刷新远端能力
+                                    </button>
+                                </form>
+                            @endif
+                            @unless ($channel->isPlatformWeb())
+                            <a href="{{ route('admin.distribution.sync-settings.preview', ['channelId' => (int) $channel->id]) }}" class="inline-flex min-h-10 items-center gap-2 rounded-md px-3 text-sm font-medium text-gray-700 transition-[background-color,transform] duration-150 [@media(hover:hover)]:hover:bg-gray-50 active:scale-[0.98]">
+                                <i data-lucide="scan-search" class="h-4 w-4"></i>
+                                同步预览
+                            </a>
+                            @endunless
+                            @if ($channel->isGeoFlowAgent())
+                                <form method="POST" action="{{ route('admin.distribution.rotate-secret', ['channelId' => (int) $channel->id]) }}" data-admin-confirm-form data-admin-confirm-tone="warning" data-admin-confirm-title="{{ __('admin.distribution.confirm.rotate_secret') }}" data-admin-confirm-message="{{ __('admin.action_dialog.target', ['name' => $channel->name]) }}" data-admin-confirm-guidance="{{ __('admin.action_dialog.generic_impact') }}" data-admin-confirm-label="{{ __('admin.distribution.button.rotate_secret') }}">
+                                    @csrf
+                                    <button type="submit" class="inline-flex min-h-10 w-full items-center gap-2 rounded-md px-3 text-left text-sm font-medium text-amber-800 transition-[background-color,transform] duration-150 [@media(hover:hover)]:hover:bg-amber-50 active:scale-[0.98]" data-admin-confirm-submit disabled aria-disabled="true">
+                                        <i data-lucide="refresh-cw" class="h-4 w-4"></i>
+                                        {{ __('admin.distribution.button.rotate_secret') }}
+                                    </button>
+                                </form>
+                            @endif
+                            @if ($canDeleteChannel)
+                                <a href="{{ route('admin.distribution.delete', ['channelId' => (int) $channel->id]) }}" class="inline-flex min-h-10 items-center gap-2 rounded-md px-3 text-sm font-medium text-red-700 transition-[background-color,transform] duration-150 [@media(hover:hover)]:hover:bg-red-50 active:scale-[0.98]">
+                                    <i data-lucide="trash-2" class="h-4 w-4"></i>
+                                    {{ __('admin.distribution.delete.button.open') }}
+                                </a>
+                            @endif
+                        </div>
+                    </details>
                 @endif
-                <form method="POST" action="{{ route('admin.distribution.health', ['channelId' => (int) $channel->id]) }}">
-                    @csrf
-                    <button type="submit" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
-                        <i data-lucide="activity" class="mr-2 h-4 w-4"></i>
-                        {{ __('admin.distribution.button.health') }}
-                    </button>
-                </form>
-                <form method="POST" action="{{ route('admin.distribution.sync-settings', ['channelId' => (int) $channel->id]) }}">
-                    @csrf
-                    <button type="submit" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
-                        <i data-lucide="settings" class="mr-2 h-4 w-4"></i>
-                        {{ __('admin.distribution.button.sync_settings') }}
-                    </button>
-                </form>
             </div>
-        </div>
+        </header>
 
+        @if ($channel->status === \App\Models\DistributionChannel::STATUS_DELETING)
+            <div class="rounded-lg border border-amber-200 bg-amber-50 px-5 py-4 text-sm leading-6 text-amber-950">
+                <div class="font-semibold">{{ __('admin.distribution.delete.deleting_banner_title') }}</div>
+                <p class="mt-1">{{ __('admin.distribution.delete.deleting_banner_desc') }}</p>
+            </div>
+        @endif
+
+        @if ($channel->status !== \App\Models\DistributionChannel::STATUS_DELETING)
         @if (session('distribution_secret'))
             @php($secret = session('distribution_secret'))
             <div class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-4">
@@ -106,7 +203,7 @@
                             <dt class="text-gray-500">{{ __('admin.distribution.field.template_key') }}</dt>
                             <dd class="mt-1 font-medium text-gray-900">{{ $channel->template_key ?: __('admin.common.none') }}</dd>
                         </div>
-                    @else
+                    @elseif ($channel->isWordPressRest())
                         <div>
                             <dt class="text-gray-500">{{ __('admin.distribution.wordpress.username') }}</dt>
                             <dd class="mt-1 font-medium text-gray-900">{{ $channelConfig['wordpress_username'] ?: __('admin.common.none') }}</dd>
@@ -114,6 +211,15 @@
                         <div>
                             <dt class="text-gray-500">{{ __('admin.distribution.wordpress.post_status') }}</dt>
                             <dd class="mt-1 font-medium text-gray-900">{{ __('admin.distribution.wordpress.post_status_'.$channelConfig['wordpress_post_status']) }}</dd>
+                        </div>
+                    @elseif ($channel->isGenericHttpApi())
+                        <div>
+                            <dt class="text-gray-500">{{ __('admin.distribution.generic.auth_type') }}</dt>
+                            <dd class="mt-1 font-medium text-gray-900">{{ __('admin.distribution.generic.auth_'.$genericConfig['generic_auth_type']) }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-gray-500">{{ __('admin.distribution.generic.publish_endpoint') }}</dt>
+                            <dd class="mt-1 break-all font-mono text-sm text-gray-900">{{ $genericConfig['generic_publish_method'] }} {{ $genericConfig['generic_publish_path'] }}</dd>
                         </div>
                     @endif
                     <div>
@@ -128,6 +234,10 @@
             </div>
 
             <div class="rounded-lg bg-white p-6 shadow">
+                @if ($channel->isPlatformWeb())
+                    <h2 class="text-lg font-medium text-gray-900">人工辅助发布</h2>
+                    <p class="mt-3 text-sm text-gray-600">在 Chrome 运营助手领取工单，打开目标页，复制标题与正文，人工发布后回传结果。更新和删除请在目标平台操作。</p>
+                @else
                 <h2 class="text-lg font-medium text-gray-900">{{ __('admin.distribution.detail.secret') }}</h2>
                 <dl class="mt-5 space-y-4 text-sm">
                     <div>
@@ -164,8 +274,77 @@
                         </div>
                     @endif
                 @endif
+                @endif
             </div>
         </div>
+
+        @unless ($channel->isPlatformWeb())
+        <div class="rounded-lg bg-white p-6 shadow">
+            <div class="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                <div>
+                    <h2 class="text-lg font-medium text-gray-900">前台体验状态</h2>
+                    <p class="mt-1 text-sm leading-6 text-gray-600">展示当前将同步到目标站的前台配置，以及最近一次缓存的远端能力。</p>
+                </div>
+                <a href="{{ route('admin.distribution.sync-settings.preview', ['channelId' => (int) $channel->id]) }}" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+                    <i data-lucide="scan-search" class="mr-2 h-4 w-4"></i>
+                    查看同步预览
+                </a>
+            </div>
+            <div class="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
+                <div class="rounded-lg border border-gray-200 bg-gray-50 px-4 py-4">
+                    <div class="text-xs font-medium text-gray-500">体验模式</div>
+                    <div class="mt-1 text-sm font-semibold text-gray-900">{{ $frontendSummary['frontend_experience_mode'] ?? $channel->frontendExperienceMode() }}</div>
+                    <div class="mt-2 text-xs leading-5 text-gray-500">{{ ($frontendSummary['active_theme'] ?? '') !== '' ? $frontendSummary['active_theme'] : '默认主题' }} · {{ $frontendSummary['front_mode'] ?? $channel->frontMode() }}</div>
+                </div>
+                <div class="rounded-lg border border-gray-200 bg-gray-50 px-4 py-4">
+                    <div class="text-xs font-medium text-gray-500">模块 / 轮播 / 文字广告</div>
+                    <div class="mt-1 text-sm font-semibold text-gray-900">{{ (int) ($frontendSummary['homepage_modules_count'] ?? 0) }} / {{ (int) ($frontendSummary['home_carousel_slides_count'] ?? 0) }} / {{ (int) ($frontendSummary['article_text_ads_count'] ?? 0) }}</div>
+                    <div class="mt-2 text-xs leading-5 text-gray-500">样式 token {{ count($frontendSummary['homepage_style_keys'] ?? []) }} 个</div>
+                </div>
+                <div class="rounded-lg border {{ $remoteStatusCopy['class'] }} px-4 py-4">
+                    <div class="text-xs font-medium opacity-75">远端能力缓存</div>
+                    <div class="mt-1 text-sm font-semibold">{{ $remoteStatusCopy['label'] }}</div>
+                    <div class="mt-2 text-xs leading-5">
+                        {{ ($remoteTarget['checked_at'] ?? '') !== '' ? '最后检查 '.$remoteTarget['checked_at'] : '尚未检查远端能力' }}
+                    </div>
+                    @if ($remoteStatus === 'ok')
+                        <div class="mt-2 text-xs leading-5">能力 {{ $remoteTarget['capability_version'] ?: '-' }} · 包 {{ $remoteTarget['package_version'] ?: '-' }}</div>
+                    @elseif ($remoteStatus === 'unsupported_or_not_found')
+                        <div class="mt-2 text-xs leading-5">建议重新下载并覆盖目标站点包。</div>
+                    @endif
+                </div>
+            </div>
+        </div>
+
+        <div class="rounded-lg bg-white p-6 shadow">
+            <div class="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                <div>
+                    <h2 class="text-lg font-medium text-gray-900">{{ __('admin.distribution.article_text_ads.detail_title') }}</h2>
+                    <p class="mt-1 text-sm leading-6 text-gray-600">{{ __('admin.distribution.article_text_ads.detail_desc') }}</p>
+                </div>
+                <a href="{{ route('admin.distribution.edit', ['channelId' => (int) $channel->id]) }}" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+                    <i data-lucide="pencil" class="mr-2 h-4 w-4"></i>
+                    {{ __('admin.button.edit') }}
+                </a>
+            </div>
+            <div class="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
+                @foreach (['content_top' => __('admin.distribution.article_text_ads.placement_top'), 'content_bottom' => __('admin.distribution.article_text_ads.placement_bottom')] as $placement => $placementLabel)
+                    @php($mode = (string) ($articleTextAdPolicy[$placement]['mode'] ?? 'inherit'))
+                    <div class="rounded-lg border border-gray-200 bg-gray-50 px-4 py-4">
+                        <div class="text-sm font-semibold text-gray-900">{{ $placementLabel }}</div>
+                        <div class="mt-2 flex flex-wrap items-center gap-2 text-sm text-gray-600">
+                            <span class="rounded-full bg-white px-2.5 py-1 font-medium text-gray-800 ring-1 ring-gray-200">{{ __('admin.distribution.article_text_ads.mode_'.$mode) }}</span>
+                            <span>{{ __('admin.distribution.article_text_ads.effective_count', ['count' => $articleTextAdCounts[$placement] ?? 0]) }}</span>
+                        </div>
+                    </div>
+                @endforeach
+            </div>
+            <div class="mt-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+                {{ __('admin.distribution.article_text_ads.package_hint') }}
+            </div>
+        </div>
+
+        @endunless
 
         @if ($channel->isGeoFlowAgent())
             <div class="rounded-lg bg-white p-6 shadow">
@@ -188,7 +367,7 @@
                             </div>
                             <div class="rounded-md border border-gray-200 bg-gray-50 px-3 py-3">
                                 <div class="font-medium text-gray-900">{{ __('admin.distribution.detail.target_package_feature_detail') }}</div>
-                                <code class="mt-1 block break-all text-xs text-gray-500">/article/{slug}</code>
+                                <code class="mt-1 block break-all text-xs text-gray-500">{{ __('article_permalink.remote_policy_hint') }}</code>
                             </div>
                         </div>
                         <div class="mt-5">
@@ -271,7 +450,7 @@
                     </li>
                 </ol>
             </div>
-        @else
+        @elseif ($channel->isWordPressRest())
             <div class="rounded-lg bg-white p-6 shadow">
                 <div class="max-w-3xl">
                     <h2 class="text-lg font-medium text-gray-900">{{ __('admin.distribution.wordpress.guide_title') }}</h2>
@@ -295,6 +474,60 @@
                         <span>{{ __('admin.distribution.wordpress.guide_step_draft') }}</span>
                     </li>
                 </ol>
+            </div>
+        @elseif ($channel->isGenericHttpApi())
+            <div class="rounded-lg bg-white p-6 shadow">
+                <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div class="max-w-3xl">
+                        <h2 class="text-lg font-medium text-gray-900">{{ __('admin.distribution.generic.guide_title') }}</h2>
+                        <p class="mt-2 text-sm leading-6 text-gray-600">{{ __('admin.distribution.generic.guide_desc') }}</p>
+                    </div>
+                    <div class="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
+                        <span class="font-medium">{{ __('admin.distribution.generic.payload_contract') }}：</span>
+                        <code class="break-all text-gray-900">GEOFlow article JSON v1</code>
+                    </div>
+                </div>
+                <div class="mt-6 grid grid-cols-1 gap-4 text-sm text-gray-700 md:grid-cols-2 xl:grid-cols-4">
+                    <div class="rounded-md border border-gray-200 bg-gray-50 p-4">
+                        <div class="font-medium text-gray-900">{{ __('admin.distribution.generic.guide_endpoint_title') }}</div>
+                        <code class="mt-2 block break-all text-xs text-gray-600">{{ $genericConfig['generic_publish_method'] }} {{ $genericConfig['generic_publish_path'] }}</code>
+                    </div>
+                    <div class="rounded-md border border-gray-200 bg-gray-50 p-4">
+                        <div class="font-medium text-gray-900">{{ __('admin.distribution.generic.guide_auth_title') }}</div>
+                        <p class="mt-2 text-xs leading-5 text-gray-600">{{ __('admin.distribution.generic.auth_'.$genericConfig['generic_auth_type']) }}</p>
+                    </div>
+                    <div class="rounded-md border border-gray-200 bg-gray-50 p-4">
+                        <div class="font-medium text-gray-900">{{ __('admin.distribution.generic.guide_response_title') }}</div>
+                        <p class="mt-2 text-xs leading-5 text-gray-600">{{ __('admin.distribution.generic.response_contract') }}</p>
+                    </div>
+                    <div class="rounded-md border border-gray-200 bg-gray-50 p-4">
+                        <div class="font-medium text-gray-900">{{ __('admin.distribution.generic.guide_settings_title') }}</div>
+                        <code class="mt-2 block break-all text-xs text-gray-600">{{ $genericConfig['generic_settings_method'] }} {{ $genericConfig['generic_settings_path'] ?: __('admin.common.none') }}</code>
+                    </div>
+                </div>
+                <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+                    <div class="rounded-md border border-gray-200 bg-gray-50 p-4">
+                        <div class="text-sm font-medium text-gray-900">{{ __('admin.distribution.generic.response_mapping_title') }}</div>
+                        <dl class="mt-3 space-y-2 text-xs text-gray-600">
+                            <div class="flex items-center justify-between gap-3">
+                                <dt>{{ __('admin.distribution.generic.remote_id_path') }}</dt>
+                                <dd class="break-all font-mono text-gray-900">{{ $genericConfig['generic_remote_id_path'] ?: __('admin.common.none') }}</dd>
+                            </div>
+                            <div class="flex items-center justify-between gap-3">
+                                <dt>{{ __('admin.distribution.generic.remote_url_path') }}</dt>
+                                <dd class="break-all font-mono text-gray-900">{{ $genericConfig['generic_remote_url_path'] ?: __('admin.common.none') }}</dd>
+                            </div>
+                            <div class="flex items-center justify-between gap-3">
+                                <dt>{{ __('admin.distribution.generic.success_statuses') }}</dt>
+                                <dd class="break-all font-mono text-gray-900">{{ implode(',', $genericConfig['generic_success_statuses']) }}</dd>
+                            </div>
+                        </dl>
+                    </div>
+                    <div class="rounded-md border border-gray-200 bg-gray-50 p-4">
+                        <div class="text-sm font-medium text-gray-900">{{ __('admin.distribution.generic.sample_payload_title') }}</div>
+                        <pre class="mt-3 max-h-72 overflow-auto rounded-md bg-gray-950 p-3 text-xs leading-5 text-gray-100"><code>{{ json_encode($genericSamplePayload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) }}</code></pre>
+                    </div>
+                </div>
             </div>
         @endif
 
@@ -336,5 +569,6 @@
                 </div>
             @endif
         </div>
+        @endif
     </div>
 @endsection

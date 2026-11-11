@@ -1,5 +1,20 @@
 @extends('site.layout')
 
+@push('head')
+    @php
+        $schemaAtContext = chr(64).'context';
+        $schemaAtType = chr(64).'type';
+        $websiteSchema = [
+            $schemaAtContext => 'https://schema.org',
+            $schemaAtType => 'WebSite',
+            'name' => $siteTitle,
+            'description' => $siteDescription,
+            'url' => $canonicalUrl,
+        ];
+    @endphp
+    <x-json-ld :data="$websiteSchema" />
+@endpush
+
 @section('content')
     <div class="site-container px-4 sm:px-6 lg:px-8 py-8">
         @if($search === '' && ! $category && ! $categoryMissing && (int) request('page', 1) === 1)
@@ -16,6 +31,16 @@
                 </div>
             </section>
         @endif
+
+        @include('site.partials.homepage-modules', [
+            'homepageModules' => $homepageModules ?? [],
+            'homepageStyle' => $homepageStyle ?? [],
+            'showHomepageModules' => $showHomepageModules ?? false,
+            'articles' => $articles,
+            'featuredArticles' => $featuredArticles,
+            'hotArticles' => $hotArticles,
+            'leadForms' => $leadForms ?? collect(),
+        ])
 
         @if($search === '' && ! $category && ! $categoryMissing && (int) request('page', 1) === 1 && $featuredArticles->isNotEmpty())
             <div class="flex items-center mb-6">

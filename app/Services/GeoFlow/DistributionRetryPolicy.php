@@ -2,6 +2,8 @@
 
 namespace App\Services\GeoFlow;
 
+use App\Exceptions\PlatformPublishBlockedException;
+use App\Services\Outbound\OutboundRequestFailedException;
 use DateTimeInterface;
 use Throwable;
 
@@ -11,6 +13,12 @@ class DistributionRetryPolicy
     {
         if ($attemptCount >= $maxAttempts) {
             return false;
+        }
+        if ($exception instanceof PlatformPublishBlockedException) {
+            return false;
+        }
+        if ($exception instanceof OutboundRequestFailedException) {
+            return true;
         }
 
         $message = mb_strtolower($exception->getMessage(), 'UTF-8');

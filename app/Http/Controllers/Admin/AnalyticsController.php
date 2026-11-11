@@ -3,78 +3,61 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Models\Article;
-use App\Models\Category;
-use App\Models\DistributionChannel;
-use App\Models\Task;
-use App\Services\Admin\Analytics\AnalyticsFilter;
-use App\Services\Admin\Analytics\AnalyticsLogQueryService;
-use App\Services\Admin\Analytics\AnalyticsOverviewService;
+use App\Services\Admin\Analytics\GrowthOverviewService;
 use App\Support\AdminWeb;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
 
 class AnalyticsController extends Controller
 {
-    public function __construct(
-        private readonly AnalyticsOverviewService $overviewService,
-        private readonly AnalyticsLogQueryService $logQueryService,
-    ) {}
+    private const TRAFFIC_QUERY_KEYS = [
+        'log_preset',
+        'log_date_from',
+        'log_date_to',
+        'log_traffic_type',
+        'log_source',
+        'traffic_type',
+    ];
 
-    public function index(Request $request): View
+    private const CONTENT_QUERY_KEYS = [
+        'preset',
+        'date_from',
+        'date_to',
+        'task_id',
+        'category_id',
+        'article_id',
+    ];
+
+    public function __construct(private readonly GrowthOverviewService $overview) {}
+
+    public function index(Request $request): View|RedirectResponse
     {
-        $filter = AnalyticsFilter::fromRequest($request->query());
+        if ($request->hasAny(self::TRAFFIC_QUERY_KEYS)) {
+            return redirect()->route('admin.analytics.traffic', $request->query());
+        }
+
+        if ($request->filled('channel_id')) {
+            if ($request->user('admin')?->canManageProtectedWorkflows() !== true) {
+                abort(403);
+            }
+
+            return redirect()->route('admin.analytics.distribution', $request->query());
+        }
+
+        if ($request->hasAny(self::CONTENT_QUERY_KEYS)) {
+            return redirect()->route('admin.analytics.content', $request->query());
+        }
+
+        $canManageProtectedWorkflows = auth('admin')->user()?->canManageProtectedWorkflows() === true;
 
         return view('admin.analytics.index', [
             'pageTitle' => __('admin.analytics.page_title'),
             'activeMenu' => 'analytics',
+            'analyticsPage' => 'overview',
             'adminSiteName' => AdminWeb::siteName(),
-            'filters' => $filter,
-            'filterOptions' => $this->filterOptions(),
-            'globalOverview' => $this->overviewService->globalOverview(),
-            'kpis' => $this->overviewService->kpis($filter),
-            'publicationTrend' => $this->overviewService->publicationTrend($filter),
-            'taskTrend' => $this->overviewService->taskTrend($filter),
-            'contentFunnel' => $this->overviewService->contentFunnel($filter),
-            'distributionSummary' => $this->overviewService->distributionSummary($filter),
-            'topContent' => $this->overviewService->topContent($filter),
-            'aiUsageSummary' => $this->overviewService->aiUsageSummary($filter),
-            'categoryDistribution' => $this->overviewService->categoryDistribution($filter),
-            'performanceStats' => $this->overviewService->performanceStats($filter),
-            'latestArticles' => $this->overviewService->latestArticles($filter),
-            'taskHealth' => $this->overviewService->taskHealth($filter),
-            'materialHealth' => $this->overviewService->materialHealth(),
-            'aiHealth' => $this->overviewService->aiHealth(),
-            'urlImportHealth' => $this->overviewService->urlImportHealth($filter),
-            'logSummary' => $this->logQueryService->summary($filter),
+            'canManageProtectedWorkflows' => $canManageProtectedWorkflows,
+            'overview' => $this->overview->snapshot($canManageProtectedWorkflows),
         ]);
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function filterOptions(): array
-    {
-        return [
-            'channels' => DistributionChannel::query()
-                ->orderBy('name')
-                ->select('id', 'name')
-                ->get(),
-            'tasks' => Task::query()
-                ->orderByDesc('created_at')
-                ->select('id', 'name')
-                ->limit(100)
-                ->get(),
-            'categories' => Category::query()
-                ->orderBy('name')
-                ->select('id', 'name')
-                ->get(),
-            'articles' => Article::query()
-                ->whereNull('deleted_at')
-                ->orderByDesc('created_at')
-                ->select('id', 'title')
-                ->limit(100)
-                ->get(),
-        ];
     }
 }

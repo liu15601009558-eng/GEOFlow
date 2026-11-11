@@ -16,7 +16,7 @@
             </div>
 
             <nav class="hidden md:flex items-center space-x-6">
-                <a href="{{ route('site.home') }}" class="flex items-center text-sm font-medium {{ $isHome ? 'text-gray-900' : 'text-gray-600 hover:text-gray-900' }}">
+                <a href="{{ route('site.home') }}" data-nav-item="home" class="flex items-center text-sm font-medium {{ $isHome ? 'text-gray-900' : 'text-gray-600 hover:text-gray-900' }}">
                     <i data-lucide="home" class="w-4 h-4 mr-1"></i>
                     {{ __('front.nav.home') }}
                 </a>
@@ -43,6 +43,12 @@
                     </div>
                 </div>
 
+                @include('site.partials.topic-navigation')
+                <a href="{{ route('site.about') }}" class="flex items-center text-sm font-medium {{ request()->routeIs('site.about') ? 'text-gray-900' : 'text-gray-600 hover:text-gray-900' }}">
+                    <i data-lucide="info" class="w-4 h-4 mr-1"></i>
+                    关于
+                </a>
+
             </nav>
 
             <button type="button" class="mobile-menu-toggle md:hidden flex items-center justify-center w-11 h-11 rounded-xl text-gray-600 hover:text-gray-900 hover:bg-gray-50" onclick="toggleMobileMenu()">
@@ -52,7 +58,7 @@
 
         <div id="mobileMenu" class="mobile-panel md:hidden hidden border-t border-gray-100 py-4">
             <nav class="flex flex-col space-y-4">
-                <a href="{{ route('site.home') }}" class="mobile-nav-link flex items-center text-sm font-medium {{ $isHome ? 'text-gray-900' : 'text-gray-600 hover:text-gray-900' }}">
+                <a href="{{ route('site.home') }}" data-nav-item="home" class="mobile-nav-link flex items-center text-sm font-medium {{ $isHome ? 'text-gray-900' : 'text-gray-600 hover:text-gray-900' }}">
                     <i data-lucide="home" class="w-4 h-4 mr-3"></i>
                     {{ __('front.nav.home') }}
                 </a>
@@ -71,6 +77,11 @@
                         </a>
                     @endforeach
                 </div>
+                @include('site.partials.topic-navigation')
+                <a href="{{ route('site.about') }}" class="mobile-nav-link flex items-center text-sm font-medium {{ request()->routeIs('site.about') ? 'text-gray-900' : 'text-gray-600 hover:text-gray-900' }}">
+                    <i data-lucide="info" class="w-4 h-4 mr-3"></i>
+                    关于
+                </a>
             </nav>
         </div>
     </div>

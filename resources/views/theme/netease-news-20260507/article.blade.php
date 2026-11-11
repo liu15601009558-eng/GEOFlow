@@ -14,7 +14,7 @@
             'dateModified' => optional($article->updated_at ?? $article->published_at ?? $article->created_at)->toAtomString(),
             'mainEntityOfPage' => [
                 $schemaAtType => 'WebPage',
-                $schemaAtId => $canonicalUrl ?? route('site.article', $article->slug),
+                $schemaAtId => $canonicalUrl ?? $siteUrls->article($article),
             ],
             'author' => [
                 $schemaAtType => 'Person',
@@ -28,16 +28,10 @@
             'keywords' => $tags,
         ];
     @endphp
-    <meta property="og:title" content="{{ $article->title }}">
-    <meta property="og:description" content="{{ $pageDescription }}">
-    <meta property="og:type" content="article">
-    <meta property="og:url" content="{{ $canonicalUrl ?? route('site.article', $article->slug) }}">
     @if($article->category)
         <meta property="article:section" content="{{ $article->category->name }}">
     @endif
-    <script type="application/ld+json">
-        {!! json_encode($articleSchema, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT) !!}
-    </script>
+    <x-json-ld :data="$articleSchema" />
 @endpush
 
 @section('content')
@@ -87,10 +81,24 @@
 
                 @if($stickyAd)
                     <section class="ne-ad-slot">
-                        @if($stickyAd->title)
-                            <h2>{{ $stickyAd->title }}</h2>
+                        @php
+                            $stickyAdTitle = is_array($stickyAd) ? trim((string) ($stickyAd['title'] ?? '')) : trim((string) ($stickyAd->title ?? ''));
+                        @endphp
+                        @if($stickyAdTitle !== '')
+                            <h2>{{ $stickyAdTitle }}</h2>
                         @endif
-                        {!! $stickyAd->content_html !!}
+                        @if(is_array($stickyAd))
+                            @if(trim((string) ($stickyAd['badge'] ?? '')) !== '')
+                                <div class="ne-card-kicker">{{ $stickyAd['badge'] }}</div>
+                            @endif
+                            <p>{{ $stickyAd['copy'] ?? '' }}</p>
+                            <a href="{{ $stickyAd['button_url'] ?? '#' }}" class="ne-card-action">
+                                {{ $stickyAd['button_text'] ?? '' }}
+                                <i data-lucide="arrow-right" class="w-4 h-4"></i>
+                            </a>
+                        @else
+                            {!! $stickyAd->content_html !!}
+                        @endif
                     </section>
                 @endif
             </article>
@@ -102,7 +110,7 @@
                     </div>
                     <div class="ne-related-grid">
                         @foreach($relatedArticles as $related)
-                            <a href="{{ route('site.article', $related->slug) }}" class="ne-related-card">
+                            <a href="{{ $siteUrls->article($related) }}" class="ne-related-card">
                                 <span class="ne-related-index">{{ $loop->iteration }}</span>
                                 <span>{{ $related->title }}</span>
                             </a>
@@ -110,6 +118,7 @@
                     </div>
                 </section>
             @endif
+            @include('site.partials.link-pool')
         </main>
 
         <aside class="ne-post-aside">
@@ -120,7 +129,7 @@
                     </div>
                     <div class="ne-hot-list">
                         @foreach($relatedArticles as $related)
-                            <a href="{{ route('site.article', $related->slug) }}" class="ne-hot-item">
+                            <a href="{{ $siteUrls->article($related) }}" class="ne-hot-item">
                                 <span class="ne-hot-index">{{ $loop->iteration }}</span>
                                 <span>{{ $related->title }}</span>
                             </a>
@@ -138,4 +147,5 @@
             </section>
         </aside>
     </div>
+@include('site.partials.related-topics')
 @endsection

@@ -2,19 +2,55 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Data\Admin\AdminAiActorContext;
+use App\Data\Admin\GovernanceAiModelData;
+use App\Data\Admin\SharedAiModelData;
+use App\Exceptions\AiModelAccessException;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Admin\StoreAiModelRequest;
+use App\Http\Requests\Admin\UpdateAiModelRequest;
+use App\Http\Requests\Admin\UpdateChunkingConfigRequest;
+use App\Http\Requests\Admin\UpdateDefaultEmbeddingRequest;
+use App\Http\Requests\Admin\UpdatePersonalAiDefaultsRequest;
+use App\Models\Admin;
+use App\Models\AdminAiSetting;
 use App\Models\AiModel;
 use App\Models\Article;
 use App\Models\SiteSetting;
+use App\Services\Admin\AdminAiActorContextService;
+use App\Services\Admin\AdminAiModelAccessResolver;
+use App\Services\Admin\AdminAiModelMutationService;
+use App\Services\Admin\AdminAiModelTestBoundaryHook;
+use App\Services\Admin\AdminAiModelTestPreparationService;
+use App\Services\Admin\AdminAiSettingsService;
+use App\Services\Admin\AdminAiSystemSettingsService;
+use App\Services\Admin\GovernanceAiModelUsageSession;
+use App\Services\Admin\GovernanceAiModelUsageSessionFactory;
+use App\Services\AiWorkspace\AiWorkspaceConnectionStatus;
+use App\Services\AiWorkspace\AiWorkspaceModelCapabilityProbe;
+use App\Services\GeoFlow\AiModelTestDiagnosisService;
+use App\Services\GeoFlow\AiUsageQuotaService;
+use App\Services\GeoFlow\AiUsageReservation;
+use App\Services\GeoFlow\ArticleAiQualityInvalidationService;
+use App\Services\Outbound\OutboundRequestBlockedException;
+use App\Services\Outbound\OutboundRequestFailedException;
+use App\Services\Outbound\SafeOutboundHttpClient;
 use App\Support\AdminWeb;
 use App\Support\GeoFlow\ApiKeyCrypto;
-use App\Support\GeoFlow\OpenAiRuntimeProvider;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Http\Client\Factory;
+use Illuminate\Http\Client\Response;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\View\View;
+use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 use Throwable;
 
 /**
@@ -31,7 +67,24 @@ class AiModelController extends Controller
     /**
      * 注入统一 API Key 加解密工具，避免控制器内重复维护密钥兼容逻辑。
      */
-    public function __construct(private readonly ApiKeyCrypto $apiKeyCrypto) {}
+    public function __construct(
+        private readonly ApiKeyCrypto $apiKeyCrypto,
+        private readonly SafeOutboundHttpClient $safeHttp,
+        private readonly Factory $http,
+        private readonly AiUsageQuotaService $usageQuota,
+        private readonly AiModelTestDiagnosisService $modelTestDiagnosis,
+        private readonly AiWorkspaceModelCapabilityProbe $aiWorkspaceModelProbe,
+        private readonly AiWorkspaceConnectionStatus $workspaceConnectionStatus,
+        private readonly ArticleAiQualityInvalidationService $qualityInvalidationService,
+        private readonly AdminAiModelAccessResolver $accessResolver,
+        private readonly AdminAiActorContextService $actorContextService,
+        private readonly AdminAiModelMutationService $mutationService,
+        private readonly AdminAiModelTestPreparationService $testPreparation,
+        private readonly AdminAiModelTestBoundaryHook $testBoundaryHook,
+        private readonly AdminAiSettingsService $aiSettingsService,
+        private readonly AdminAiSystemSettingsService $systemSettingsService,
+        private readonly GovernanceAiModelUsageSessionFactory $usageSessions,
+    ) {}
 
     /**
      * AI 模型列表页。
@@ -39,18 +92,135 @@ class AiModelController extends Controller
      * 输出页面所需完整数据：模型列表、可选 embedding 模型、默认 embedding 模型 ID、
      * 以及 pgvector 可用状态，保证页面在一个请求内即可渲染。
      */
-    public function index(): View
+    public function index(Request $request): View
     {
-        return view('admin.ai-models.index', [
+        $authenticatedActor = $this->activeActor($request);
+        $actorContext = $this->actorContextService->resolve($authenticatedActor);
+        $actor = $actorContext->actor;
+        Gate::forUser($actor)->authorize('viewAny', AiModel::class);
+        $personalSettings = AdminAiSetting::query()
+            ->where('admin_id', $actor->getKey())
+            ->first();
+        $myModels = $this->loadModels(
+            $this->accessResolver->managementQuery($actor),
+            (int) ($personalSettings?->default_embedding_model_id ?? 0),
+        );
+        $ordinaryPartitions = $actor->isSuperAdmin()
+            ? ['shared_models' => [], 'default_options' => []]
+            : $this->loadOrdinaryVisibleModelPartitions($actorContext);
+        $sharedModels = $ordinaryPartitions['shared_models'];
+        $governancePaginator = $actor->isSuperAdmin() ? $this->loadGovernanceModels($actor) : null;
+        $governanceModels = $governancePaginator?->items() ?? [];
+        $personalDefaultModelOptions = $actor->isSuperAdmin()
+            ? $this->personalDefaultModelOptions($actor)
+            : $ordinaryPartitions['default_options'];
+
+        $viewData = [
             'pageTitle' => __('admin.ai_models.page_title'),
             'activeMenu' => 'ai_config',
             'adminSiteName' => AdminWeb::siteName(),
-            'models' => $this->loadModels(),
-            'embeddingModels' => $this->loadActiveEmbeddingModels(),
-            'chatModels' => $this->loadActiveChatModels(),
-            'defaultEmbeddingModelId' => $this->getDefaultEmbeddingModelId(),
-            'chunkingConfig' => $this->getChunkingConfig(),
-            'pgvectorEnabled' => $this->isPgvectorEnabled(),
+            'models' => $myModels,
+            'myModels' => $myModels,
+            'sharedModels' => $sharedModels,
+            'governanceModels' => $governanceModels,
+            'governancePaginator' => $governancePaginator,
+            'showSystemConfiguration' => $actor->isSuperAdmin(),
+            'actorIsSuperAdmin' => $actor->isSuperAdmin(),
+            'accessPreview' => $actor->isSuperAdmin()
+                ? null
+                : $this->accessPreview($actorContext, $personalDefaultModelOptions),
+            'personalDefaultModelOptions' => $personalDefaultModelOptions,
+            'personalDefaultChatModelId' => (int) ($personalSettings?->default_chat_model_id ?? 0),
+            'personalDefaultEmbeddingModelId' => (int) ($personalSettings?->default_embedding_model_id ?? 0),
+            'contentMaxTokens' => $this->defaultContentMaxTokens(),
+            'supportsModelMaxTokens' => $this->supportsModelMaxTokens(),
+        ];
+        if ($actor->isSuperAdmin()) {
+            $viewData += [
+                'embeddingModels' => $this->systemSettingsService->modelOptions($actor, 'embedding'),
+                'chatModels' => $this->systemSettingsService->modelOptions($actor, 'chat'),
+                'defaultEmbeddingModelId' => $this->getDefaultEmbeddingModelId(),
+                'chunkingConfig' => $this->getChunkingConfig(),
+                'pgvectorEnabled' => $this->isPgvectorEnabled(),
+            ];
+        }
+
+        return view('admin.ai-models.index', $viewData);
+    }
+
+    public function updatePersonalDefaults(UpdatePersonalAiDefaultsRequest $request): RedirectResponse
+    {
+        $actor = $this->activeActor($request);
+
+        try {
+            $this->aiSettingsService->setDefaults(
+                $actor,
+                $request->modelReference('default_chat_model_id'),
+                $request->modelReference('default_embedding_model_id'),
+                $actor,
+            );
+        } catch (AiModelAccessException $exception) {
+            return back()->withErrors([
+                'personal_defaults' => __('admin.ai_models.error.personal_default_rejected', [
+                    'code' => $exception->getErrorCode(),
+                ]),
+            ]);
+        }
+
+        return redirect()
+            ->route('admin.ai-models.index')
+            ->with('message', __('admin.ai_models.message.personal_defaults_updated'));
+    }
+
+    /**
+     * AI 模型创建页。
+     */
+    public function create(Request $request): View
+    {
+        $actor = $this->activeActor($request);
+        Gate::forUser($actor)->authorize('create', AiModel::class);
+
+        return view('admin.ai-models.create', [
+            'pageTitle' => __('admin.ai_models.create_page_title'),
+            'activeMenu' => 'ai_config',
+            'adminSiteName' => AdminWeb::siteName(),
+            'contentMaxTokens' => $this->defaultContentMaxTokens(),
+            'supportsModelMaxTokens' => $this->supportsModelMaxTokens(),
+            'actorIsSuperAdmin' => $actor->isSuperAdmin(),
+        ]);
+    }
+
+    /**
+     * AI 模型编辑页。
+     */
+    public function edit(Request $request, int $modelId): View
+    {
+        $columns = [
+            'id',
+            'name',
+            'version',
+            'model_id',
+            'model_type',
+            'api_url',
+            'failover_priority',
+            'daily_limit',
+            'status',
+            'access_scope',
+        ];
+        if ($this->supportsModelMaxTokens()) {
+            $columns[] = 'max_tokens';
+        }
+
+        $model = $this->configurableModel($request, $modelId, 'update', $columns);
+
+        return view('admin.ai-models.edit', [
+            'pageTitle' => __('admin.ai_models.modal_edit'),
+            'activeMenu' => 'ai_config',
+            'adminSiteName' => AdminWeb::siteName(),
+            'model' => $model,
+            'contentMaxTokens' => $this->defaultContentMaxTokens(),
+            'supportsModelMaxTokens' => $this->supportsModelMaxTokens(),
+            'actorIsSuperAdmin' => $this->activeActor($request)->isSuperAdmin(),
         ]);
     }
 
@@ -59,11 +229,13 @@ class AiModelController extends Controller
      *
      * 说明：
      * - 创建时 API Key 必填，并在写入前加密；
-     * - 若新增的是 embedding 模型，且系统尚未设置默认 embedding，则自动兜底为该模型。
+     * - 首次新增个人 Chat 或 Embedding 模型时，安全补充对应的个人默认模型。
      */
-    public function store(Request $request): RedirectResponse
+    public function store(StoreAiModelRequest $request): RedirectResponse
     {
-        $payload = $this->validateModelPayload($request, false);
+        $actor = $request->user('admin');
+        abort_unless($actor instanceof Admin, 404);
+        $payload = $request->validated();
 
         $apiKey = trim((string) ($payload['api_key'] ?? ''));
         if ($apiKey === '') {
@@ -71,24 +243,40 @@ class AiModelController extends Controller
         }
 
         try {
-            $createdModel = AiModel::query()->create([
-                'name' => trim((string) $payload['name']),
-                'version' => trim((string) ($payload['version'] ?? '')),
-                'api_key' => $this->encryptApiKey($apiKey),
-                'model_id' => trim((string) $payload['model_id']),
-                'model_type' => $this->normalizeModelType((string) ($payload['model_type'] ?? 'chat')),
-                'api_url' => trim((string) ($payload['api_url'] ?? '')),
-                'failover_priority' => max(1, (int) ($payload['failover_priority'] ?? 100)),
-                'daily_limit' => max(0, (int) ($payload['daily_limit'] ?? 0)),
-                'status' => 'active',
-            ]);
+            $encryptedApiKey = $this->encryptApiKey($apiKey);
         } catch (\RuntimeException) {
-            return back()->withInput()->withErrors(__('admin.ai_models.error.crypto_key_missing'));
+            return back()
+                ->withInput(Arr::except($payload, ['api_key']))
+                ->withErrors(__('admin.ai_models.error.crypto_key_missing'));
         }
 
-        // 当系统尚未指定默认 embedding 模型时，首次创建 embedding 模型自动兜底。
-        if ($createdModel->model_type === 'embedding' && $this->getDefaultEmbeddingModelId() <= 0) {
-            $this->setDefaultEmbeddingModelId((int) $createdModel->id);
+        $modelType = $this->normalizeModelType((string) ($payload['model_type'] ?? 'chat'));
+        $createData = [
+            'name' => trim((string) $payload['name']),
+            'version' => trim((string) ($payload['version'] ?? '')),
+            'api_key' => $encryptedApiKey,
+            'model_id' => trim((string) $payload['model_id']),
+            'model_type' => $modelType,
+            'api_url' => trim((string) ($payload['api_url'] ?? '')),
+            'failover_priority' => max(1, (int) ($payload['failover_priority'] ?? 100)),
+            'daily_limit' => max(0, (int) ($payload['daily_limit'] ?? 0)),
+            'status' => 'active',
+        ];
+        if ($this->supportsModelMaxTokens()) {
+            $createData['max_tokens'] = $this->normalizeMaxTokensForModelType($payload['max_tokens'] ?? null, $modelType);
+        }
+
+        $createdModel = $this->mutationService->create(
+            $actor,
+            $createData,
+            (string) ($payload['access_scope'] ?? AiModel::ACCESS_SCOPE_USER_CONTENT),
+        )->model;
+
+        if ($createdModel->model_type === 'chat') {
+            $this->invalidateQualityModelAfterCommit(
+                (int) $createdModel->id,
+                'AI 质检智能切换候选模型已增加',
+            );
         }
 
         return redirect()->route('admin.ai-models.index')->with('message', __('admin.ai_models.message.create_success'));
@@ -99,13 +287,14 @@ class AiModelController extends Controller
      *
      * 说明：
      * - 编辑时 API Key 可留空（留空表示保留原值）；
-     * - 若当前模型是默认 embedding，但更新后不再是“active + embedding”，
-     *   则清空默认 embedding 配置，避免指向不可用模型。
+     * - 更新后清理已失效或类型不兼容的个人默认模型引用；
+     * - 超级管理员更新系统默认 embedding 时继续保持原有兼容清理。
      */
-    public function update(Request $request, int $modelId): RedirectResponse
+    public function update(UpdateAiModelRequest $request, int $modelId): RedirectResponse
     {
-        $model = AiModel::query()->whereKey($modelId)->firstOrFail();
-        $payload = $this->validateModelPayload($request, true);
+        $actor = $this->activeActor($request);
+        $model = $request->aiModel();
+        $payload = $request->validated();
 
         $modelType = $this->normalizeModelType((string) ($payload['model_type'] ?? 'chat'));
         $status = (string) ($payload['status'] ?? 'active');
@@ -123,22 +312,38 @@ class AiModelController extends Controller
             'daily_limit' => max(0, (int) ($payload['daily_limit'] ?? 0)),
             'status' => $status,
         ];
+        if ($this->supportsModelMaxTokens()) {
+            $updateData['max_tokens'] = $this->normalizeMaxTokensForModelType($payload['max_tokens'] ?? null, $modelType);
+        }
 
         $apiKey = trim((string) ($payload['api_key'] ?? ''));
         if ($apiKey !== '') {
             try {
                 $updateData['api_key'] = $this->encryptApiKey($apiKey);
             } catch (\RuntimeException) {
-                return back()->withInput()->withErrors(__('admin.ai_models.error.crypto_key_missing'));
+                return back()
+                    ->withInput(Arr::except($payload, ['api_key']))
+                    ->withErrors(__('admin.ai_models.error.crypto_key_missing'));
             }
         }
 
-        $model->update($updateData);
-
-        $defaultEmbeddingModelId = $this->getDefaultEmbeddingModelId();
-        if ($defaultEmbeddingModelId === (int) $model->id && ($modelType !== 'embedding' || $status !== 'active')) {
-            $this->setDefaultEmbeddingModelId(0);
+        $updateResult = $this->mutationService->update(
+            $actor,
+            (int) $model->getKey(),
+            $updateData,
+            (string) ($payload['access_scope'] ?? $model->access_scope),
+        );
+        if (! $updateResult->succeeded()) {
+            return back()
+                ->withInput(Arr::except($payload, ['api_key']))
+                ->withErrors(__('admin.ai_models.error.title_generation_in_use'));
         }
+
+        $model = $updateResult->model;
+        $this->invalidateQualityModelAfterCommit(
+            (int) $model->getKey(),
+            'AI 质检模型配置已更新',
+        );
 
         return redirect()->route('admin.ai-models.index')->with('message', __('admin.ai_models.message.update_success'));
     }
@@ -148,19 +353,18 @@ class AiModelController extends Controller
      *
      * 删除策略：
      * - 仅当任务引用数为 0 时允许删除；
-     * - 若删除目标是默认 embedding 模型，同步清空默认设置。
+     * - 删除前清理所有管理员的个人默认引用；
+     * - 超级管理员删除系统默认 embedding 时同步清理全局设置。
      */
-    public function destroy(int $modelId): RedirectResponse
+    public function destroy(Request $request, int $modelId): RedirectResponse
     {
-        $model = AiModel::query()->whereKey($modelId)->firstOrFail();
-        $taskCount = $model->tasks()->count();
-        if ($taskCount > 0) {
-            return back()->withErrors(__('admin.ai_models.error.in_use', ['count' => $taskCount]));
+        $actor = $this->activeActor($request);
+        $result = $this->mutationService->delete($actor, $modelId);
+        if ($result->error === 'title_generation') {
+            return back()->withErrors(__('admin.ai_models.error.title_generation_in_use'));
         }
-
-        $model->delete();
-        if ($this->getDefaultEmbeddingModelId() === (int) $model->id) {
-            $this->setDefaultEmbeddingModelId(0);
+        if ($result->error === 'task') {
+            return back()->withErrors(__('admin.ai_models.error.in_use', ['count' => $result->dependencyCount]));
         }
 
         return redirect()->route('admin.ai-models.index')->with('message', __('admin.ai_models.message.delete_success'));
@@ -169,67 +373,216 @@ class AiModelController extends Controller
     /**
      * 测试单个 AI 模型的 API 连通性。
      *
-     * 只发起最小化请求，不增加模型调用统计，也不返回敏感密钥。
+     * 只发起最小化请求，并纳入统一每日额度与调用统计，不返回敏感密钥。
      */
-    public function testConnection(int $modelId): JsonResponse
+    public function testConnection(Request $request, int $modelId): JsonResponse
     {
-        $model = AiModel::query()->whereKey($modelId)->firstOrFail();
         $startedAt = microtime(true);
+        $reservation = null;
+        $outboundAttempted = false;
+        $apiKey = '';
+        $providerReturned = false;
+        $usageSession = null;
+        $model = new AiModel;
+        $model->setAttribute($model->getKeyName(), $modelId);
+        $model->exists = true;
 
         try {
-            $modelType = $this->normalizeModelType((string) ($model->model_type ?? 'chat'));
-            $endpoint = $this->resolveTestEndpoint($model, $modelType);
-            $apiKey = $this->decryptApiKey((string) ($model->getRawOriginal('api_key') ?? ''));
-            $modelName = trim((string) ($model->model_id ?? ''));
-            $isGemini = OpenAiRuntimeProvider::isGeminiProviderUrl($endpoint);
+            $actor = $this->activeActor($request);
+            $snapshot = $this->testPreparation->prepare($actor, $modelId);
+            $model = $snapshot->modelForWorkspaceProbe();
+            $reservation = $snapshot->reservation;
+            $usageSession = $this->usageSessions->create($snapshot);
+            $modelType = $snapshot->modelType;
+            $endpoint = $snapshot->endpoint;
+            $apiKey = $snapshot->apiKey();
+            $modelName = trim($snapshot->providerModelId);
+            $isGemini = $snapshot->gemini;
+            $usesOpenAiResponses = $snapshot->usesOpenAiResponses;
+            $isVolcengineMultimodal = $snapshot->volcengineMultimodal;
 
             if ($endpoint === '') {
-                return $this->modelTestResponse(false, __('admin.ai_models.test_error_api_url_missing'), $startedAt, $modelType);
+                return $this->modelTestResponse(
+                    false,
+                    __('admin.ai_models.test_error_api_url_missing'),
+                    $startedAt,
+                    $modelType,
+                    diagnosis: $this->modelTestDiagnosis->forLocalFailure('api_url_missing'),
+                );
             }
             if ($apiKey === '') {
-                return $this->modelTestResponse(false, __('admin.ai_models.test_error_api_key_missing'), $startedAt, $modelType, $endpoint);
+                return $this->modelTestResponse(
+                    false,
+                    __('admin.ai_models.test_error_api_key_missing'),
+                    $startedAt,
+                    $modelType,
+                    $endpoint,
+                    diagnosis: $this->modelTestDiagnosis->forLocalFailure('api_key_missing'),
+                );
             }
             if ($modelName === '') {
-                return $this->modelTestResponse(false, __('admin.ai_models.test_error_model_missing'), $startedAt, $modelType, $endpoint);
+                return $this->modelTestResponse(
+                    false,
+                    __('admin.ai_models.test_error_model_missing'),
+                    $startedAt,
+                    $modelType,
+                    $endpoint,
+                    diagnosis: $this->modelTestDiagnosis->forLocalFailure('model_id_missing'),
+                );
             }
 
-            $request = Http::acceptJson()
+            if ($reservation === null) {
+                return $this->modelTestResponse(
+                    false,
+                    __('admin.ai_models.test_error_daily_limit'),
+                    $startedAt,
+                    $modelType,
+                    $endpoint,
+                    diagnosis: $this->modelTestDiagnosis->forLocalFailure('daily_limit_reached'),
+                );
+            }
+
+            $this->testBoundaryHook->beforeRevalidation($snapshot);
+            $actorIsSuperAdmin = $this->testPreparation->revalidateImmediatelyBeforeOutbound($snapshot);
+
+            if ($modelType === 'chat' && ($actorIsSuperAdmin || $request->boolean('workspace_check'))) {
+                $this->testPreparation->revalidateImmediatelyBeforeOutbound($snapshot, workspaceCheck: true);
+                $this->safeHttp->resolveTarget($endpoint);
+                $probeAttempt = $this->aiWorkspaceModelProbe->start($model, $usageSession);
+                $outboundAttempted = $usageSession->hasStartedProviderAttempt();
+                $this->testBoundaryHook->afterOutboundBeforePersist($snapshot);
+                $this->testPreparation->revalidateWorkspaceAfterOutbound($snapshot);
+                $usageSession->finalizePendingOutcomes();
+                try {
+                    if ($probeAttempt->requiresPlainTextFallback()) {
+                        $this->testBoundaryHook->beforeRevalidation($snapshot);
+                        $this->testPreparation->revalidateImmediatelyBeforeOutbound($snapshot, workspaceCheck: true);
+                        $this->safeHttp->resolveTarget($snapshot->endpoint);
+                    }
+                    $probeResult = $this->aiWorkspaceModelProbe->finish($model, $probeAttempt, $usageSession);
+                } catch (Throwable $exception) {
+                    if ($probeAttempt->requiresPlainTextFallback()) {
+                        $this->testBoundaryHook->afterOutboundBeforePersist($snapshot);
+                        $this->testPreparation->revalidateWorkspaceAfterOutbound($snapshot);
+                    }
+                    $this->testPreparation->persistWorkspaceFailure(
+                        $snapshot,
+                        $this->aiWorkspaceModelProbe->failureCode($exception),
+                    );
+                    $usageSession->finalizePendingOutcomes();
+
+                    throw $exception;
+                }
+                if ($probeAttempt->requiresPlainTextFallback()) {
+                    $this->testBoundaryHook->afterOutboundBeforePersist($snapshot);
+                }
+                $this->testPreparation->persistWorkspaceReadiness($snapshot, $probeResult);
+                $usageSession->succeededPending();
+                $result = $probeResult->responseData();
+                try {
+                    $this->usageQuota->recordModelSuccess($reservation);
+                } catch (Throwable $exception) {
+                    report($exception);
+                }
+                $reservation = null;
+
+                $workspaceConnection = $this->workspaceConnectionStatus
+                    ->forAdmin(Admin::query()->findOrFail($snapshot->adminId));
+
+                return $this->modelTestResponse(
+                    true,
+                    __('admin.ai_models.test_success', ['type' => 'Chat']),
+                    $startedAt,
+                    $modelType,
+                    (string) $result['endpoint'],
+                    (int) $result['http_status'],
+                    [
+                        'workspace_ready' => $workspaceConnection['ready'],
+                        'workspace_connection' => $workspaceConnection,
+                        'readiness_status' => (string) $result['readiness_status'],
+                        'readiness_profile' => (array) $result['profile'],
+                        'readiness_expires_at' => (string) $result['expires_at'],
+                    ],
+                );
+            }
+
+            $request = $this->http->acceptJson()
                 ->asJson()
+                ->connectTimeout(8)
                 ->timeout(45);
 
             $request = $isGemini
                 ? $request->withHeaders(['x-goog-api-key' => $apiKey])
                 : $request->withToken($apiKey);
 
-            $response = $request->post($endpoint, $this->buildTestPayload($modelName, $modelType, $isGemini));
+            $testPayload = $this->buildTestPayload($modelName, $modelType, $isGemini, $usesOpenAiResponses, $isVolcengineMultimodal);
+            $response = $this->safeHttp->post(
+                $request,
+                $endpoint,
+                $testPayload,
+                (int) config('geoflow.outbound_ai_max_bytes', 8 * 1024 * 1024),
+                function () use (&$outboundAttempted, $usageSession, $model, $testPayload): void {
+                    $usageSession->begin(
+                        model: $model,
+                        callKey: 'direct.p1',
+                        requestPayload: json_encode($testPayload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES),
+                    );
+                    $outboundAttempted = $usageSession->hasStartedProviderAttempt();
+                },
+            );
+            $providerReturned = true;
 
+            $this->testBoundaryHook->afterOutboundBeforePersist($snapshot);
+            $this->testPreparation->revalidateAfterOutbound($snapshot);
             $json = $response->json();
             if (! $response->successful()) {
+                $usageSession->failed('direct.p1', 'ai_provider_http_failure', $json['usage'] ?? null);
+                if ($reservation instanceof AiUsageReservation) {
+                    $this->recordModelTestAttempt($reservation);
+                }
+
                 return $this->modelTestResponse(
                     false,
                     __('admin.ai_models.test_failed_with_status', [
                         'status' => (string) $response->status(),
-                        'message' => $this->previewResponseBody($response->body()),
+                        'message' => $this->safeRemoteDetail($response, $apiKey),
                     ]),
                     $startedAt,
                     $modelType,
                     $endpoint,
-                    $response->status()
+                    $response->status(),
+                    diagnosis: $this->modelTestDiagnosis->forHttpFailure($model, $apiKey, $response->status()),
                 );
             }
 
-            if (! $this->isValidTestResponse($json, $modelType, $isGemini)) {
+            if (! $this->isValidTestResponse($json, $modelType, $isGemini, $usesOpenAiResponses, $isVolcengineMultimodal)) {
+                $usageSession->discarded('direct.p1', 'ai_provider_response_invalid', $json['usage'] ?? null);
+                if ($reservation instanceof AiUsageReservation) {
+                    $this->recordModelTestAttempt($reservation);
+                }
+
                 return $this->modelTestResponse(
                     false,
                     __('admin.ai_models.test_invalid_response', [
-                        'message' => $this->previewResponseBody($response->body()),
+                        'message' => $this->safeRemoteDetail($response, $apiKey),
                     ]),
                     $startedAt,
                     $modelType,
                     $endpoint,
-                    $response->status()
+                    $response->status(),
+                    diagnosis: $this->modelTestDiagnosis->forInvalidResponse($model, $apiKey),
                 );
             }
+
+            if ($reservation instanceof AiUsageReservation) {
+                try {
+                    $this->usageQuota->recordModelSuccess($reservation);
+                } catch (Throwable $exception) {
+                    report($exception);
+                }
+            }
+            $usageSession->retainUsage('direct.p1', $json['usage'] ?? null);
+            $usageSession->succeededPending();
 
             return $this->modelTestResponse(
                 true,
@@ -239,12 +592,42 @@ class AiModelController extends Controller
                 $endpoint,
                 $response->status()
             );
+        } catch (HttpExceptionInterface $exception) {
+            throw $exception;
         } catch (Throwable $exception) {
+            $outboundAttempted = $outboundAttempted
+                || ($usageSession instanceof GovernanceAiModelUsageSession
+                    && $usageSession->hasStartedProviderAttempt());
+            if ($usageSession instanceof GovernanceAiModelUsageSession) {
+                if ($exception instanceof AiModelAccessException) {
+                    $usageSession->revokedPending();
+                } elseif ($providerReturned) {
+                    $usageSession->discardedPending();
+                } else {
+                    $usageSession->failed('direct.p1');
+                    $usageSession->discardedPending();
+                }
+            }
+            if ($reservation instanceof AiUsageReservation) {
+                if ($outboundAttempted) {
+                    $this->recordModelTestAttempt($reservation);
+                } else {
+                    $this->releaseModelTestReservation($reservation);
+                }
+            }
+
+            Log::warning('AI model connection test failed.', [
+                'ai_model_id' => (int) $model->id,
+                'exception' => $exception::class,
+                'reason_code' => property_exists($exception, 'reasonCode') ? (string) $exception->reasonCode : null,
+            ]);
+
             return $this->modelTestResponse(
                 false,
-                __('admin.ai_models.test_exception', ['message' => $this->previewResponseBody($exception->getMessage())]),
+                __('admin.ai_models.test_exception', ['message' => $this->safeExceptionDetail($exception)]),
                 $startedAt,
-                $this->normalizeModelType((string) ($model->model_type ?? 'chat'))
+                $this->normalizeModelType((string) ($model->model_type ?? 'chat')),
+                diagnosis: $this->modelTestDiagnosis->forException($exception, $model, $apiKey),
             );
         }
     }
@@ -256,23 +639,11 @@ class AiModelController extends Controller
      * - 只允许选择 active + embedding 的模型；
      * - 允许传 0，表示恢复自动选择策略。
      */
-    public function updateDefaultEmbedding(Request $request): RedirectResponse
+    public function updateDefaultEmbedding(UpdateDefaultEmbeddingRequest $request): RedirectResponse
     {
-        $modelId = max(0, (int) $request->input('default_embedding_model_id', 0));
-
-        if ($modelId > 0) {
-            $available = AiModel::query()
-                ->whereKey($modelId)
-                ->where('status', 'active')
-                ->whereRaw("COALESCE(NULLIF(model_type, ''), 'chat') = 'embedding'")
-                ->exists();
-
-            if (! $available) {
-                return back()->withErrors(__('admin.ai_models.error.embedding_unavailable'));
-            }
-        }
-
-        $this->setDefaultEmbeddingModelId($modelId);
+        $actor = $request->user('admin');
+        abort_unless($actor instanceof Admin, 404);
+        $this->systemSettingsService->updateDefaultEmbedding($actor, $request->modelId());
 
         return redirect()->route('admin.ai-models.index')->with('message', __('admin.ai_models.message.embedding_default_updated'));
     }
@@ -280,44 +651,11 @@ class AiModelController extends Controller
     /**
      * 更新知识库切片策略。
      */
-    public function updateChunkingConfig(Request $request): RedirectResponse
+    public function updateChunkingConfig(UpdateChunkingConfigRequest $request): RedirectResponse
     {
-        $payload = $request->validate([
-            'knowledge_chunk_strategy' => ['required', 'in:rule,auto,semantic_llm'],
-            'knowledge_chunking_model_id' => ['nullable', 'integer', 'min:0'],
-        ]);
-
-        $strategy = (string) $payload['knowledge_chunk_strategy'];
-        $modelId = max(0, (int) ($payload['knowledge_chunking_model_id'] ?? 0));
-
-        if ($modelId > 0) {
-            $available = AiModel::query()
-                ->whereKey($modelId)
-                ->where('status', 'active')
-                ->where(function ($query): void {
-                    $query->whereNull('model_type')
-                        ->orWhere('model_type', '')
-                        ->orWhere('model_type', 'chat');
-                })
-                ->exists();
-
-            if (! $available) {
-                return back()->withErrors(__('admin.ai_models.error.chunking_model_unavailable'));
-            }
-        }
-
-        if ($strategy === 'semantic_llm' && $modelId <= 0) {
-            return back()->withErrors(__('admin.ai_models.error.chunking_model_required'));
-        }
-
-        SiteSetting::query()->updateOrCreate(
-            ['setting_key' => 'knowledge_chunk_strategy'],
-            ['setting_value' => $strategy]
-        );
-        SiteSetting::query()->updateOrCreate(
-            ['setting_key' => 'knowledge_chunking_model_id'],
-            ['setting_value' => (string) $modelId]
-        );
+        $actor = $request->user('admin');
+        abort_unless($actor instanceof Admin, 404);
+        $this->systemSettingsService->updateChunking($actor, $request->strategy(), $request->modelId());
 
         return redirect()->route('admin.ai-models.index')->with('message', __('admin.ai_models.message.chunking_config_updated'));
     }
@@ -325,26 +663,47 @@ class AiModelController extends Controller
     /**
      * @return array<int, array<string, mixed>>
      */
-    private function loadModels(): array
+    private function loadModels(Builder $query, int $defaultEmbeddingModelId): array
     {
-        $models = AiModel::query()
-            ->select([
-                'id',
-                'name',
-                'version',
-                'api_key',
-                'model_id',
-                'model_type',
-                'api_url',
-                'failover_priority',
-                'daily_limit',
-                'used_today',
-                'total_used',
-                'status',
-                'created_at',
-                'updated_at',
+        $supportsMaxTokens = $this->supportsModelMaxTokens();
+        $columns = [
+            'id',
+            'name',
+            'version',
+            'api_key',
+            'model_id',
+            'model_type',
+            'api_url',
+            'failover_priority',
+            'daily_limit',
+            'used_today',
+            'usage_date',
+            'total_used',
+            'status',
+            'created_at',
+            'updated_at',
+        ];
+        if ($supportsMaxTokens) {
+            $columns[] = 'max_tokens';
+        }
+        foreach ([
+            'ai_workspace_readiness_status',
+            'ai_workspace_readiness_profile',
+            'ai_workspace_readiness_checked_at',
+            'ai_workspace_readiness_expires_at',
+            'ai_workspace_readiness_failure_code',
+        ] as $workspaceColumn) {
+            if (Schema::hasColumn('ai_models', $workspaceColumn)) {
+                $columns[] = $workspaceColumn;
+            }
+        }
+
+        $models = $query
+            ->select($columns)
+            ->withCount([
+                'tasks as content_task_count' => fn ($query) => $query->withTrashed(),
+                'qualityTasks as quality_task_count' => fn ($query) => $query->withTrashed(),
             ])
-            ->withCount('tasks as task_count')
             ->addSelect([
                 'article_count' => Article::query()
                     ->selectRaw('COUNT(articles.id)')
@@ -354,102 +713,171 @@ class AiModelController extends Controller
             ->orderByDesc('created_at')
             ->get();
 
-        $defaultEmbeddingModelId = $this->getDefaultEmbeddingModelId();
-
-        return $models->map(function (AiModel $model) use ($defaultEmbeddingModelId): array {
+        return $models->map(function (AiModel $model) use ($defaultEmbeddingModelId, $supportsMaxTokens): array {
             $modelType = $this->normalizeModelType((string) ($model->model_type ?? 'chat'));
+            $workspaceReadinessStatus = (string) ($model->ai_workspace_readiness_status ?? '');
+            if ($workspaceReadinessStatus === 'ready' && $model->ai_workspace_readiness_expires_at?->isPast()) {
+                $workspaceReadinessStatus = 'stale';
+            }
 
             return [
                 'id' => (int) $model->id,
                 'name' => (string) $model->name,
                 'version' => (string) ($model->version ?? ''),
-                'model_id' => (string) $model->model_id,
+                'model_id' => $this->modelTestDiagnosis->modelIdForDisplay((string) $model->model_id),
                 'model_type' => $modelType,
                 'api_url' => (string) ($model->api_url ?? ''),
                 'failover_priority' => (int) ($model->failover_priority ?? 100),
                 'daily_limit' => (int) ($model->daily_limit ?? 0),
-                'used_today' => (int) ($model->used_today ?? 0),
+                'used_today' => $model->currentUsage(),
                 'total_used' => (int) ($model->total_used ?? 0),
                 'status' => (string) ($model->status ?? 'active'),
-                'task_count' => (int) ($model->task_count ?? 0),
+                'max_tokens' => $supportsMaxTokens && $model->max_tokens !== null ? (int) $model->max_tokens : null,
+                'task_count' => (int) ($model->content_task_count ?? 0) + (int) ($model->quality_task_count ?? 0),
                 'article_count' => (int) ($model->article_count ?? 0),
-                'masked_api_key' => $this->maskApiKey((string) ($model->getRawOriginal('api_key') ?? '')),
+                'api_key_configured' => $this->decryptApiKey((string) ($model->getRawOriginal('api_key') ?? '')) !== '',
                 'is_default_embedding' => $modelType === 'embedding' && $defaultEmbeddingModelId === (int) $model->id,
+                'workspace_readiness_status' => $workspaceReadinessStatus,
+                'workspace_readiness_profile' => (array) ($model->ai_workspace_readiness_profile ?? []),
+                'workspace_readiness_checked_at' => $model->ai_workspace_readiness_checked_at?->toISOString(),
+                'workspace_readiness_expires_at' => $model->ai_workspace_readiness_expires_at?->toISOString(),
+                'workspace_readiness_failure_code' => (string) ($model->ai_workspace_readiness_failure_code ?? ''),
             ];
         })->all();
     }
 
     /**
-     * 可用于默认 embedding 下拉框的模型列表。
-     *
-     * @return array<int, array{id:int,name:string,model_id:string}>
+     * @return array{
+     *   shared_models:array<int,array<string,mixed>>,
+     *   default_options:array<int,array{id:int,name:string,version:string,model_type:string,source:string}>
+     * }
      */
-    private function loadActiveEmbeddingModels(): array
+    private function loadOrdinaryVisibleModelPartitions(AdminAiActorContext $context): array
     {
-        return AiModel::query()
-            ->select(['id', 'name', 'model_id'])
-            ->where('status', 'active')
-            ->whereRaw("COALESCE(NULLIF(model_type, ''), 'chat') = 'embedding'")
-            ->orderBy('name')
-            ->orderByDesc('id')
-            ->get()
-            ->map(static fn (AiModel $model): array => [
-                'id' => (int) $model->id,
-                'name' => (string) $model->name,
-                'model_id' => (string) ($model->model_id ?? ''),
+        $actor = $context->actor;
+        $ownerIds = [(int) $actor->getKey()];
+        if ($context->hasActiveSharedProvider()) {
+            $ownerIds[] = (int) $context->sharedProvider?->getKey();
+        }
+        $models = AiModel::query()
+            ->select([
+                'id',
+                'owner_admin_id',
+                'name',
+                'version',
+                'model_type',
+                'status',
+                'failover_priority',
+                'access_scope',
+                'archived_at',
             ])
-            ->all();
-    }
-
-    /**
-     * 可用于知识库语义切片规划的聊天模型列表。
-     *
-     * @return array<int, array{id:int,name:string,model_id:string}>
-     */
-    private function loadActiveChatModels(): array
-    {
-        return AiModel::query()
-            ->select(['id', 'name', 'model_id'])
-            ->where('status', 'active')
-            ->where(function ($query): void {
-                $query->whereNull('model_type')
-                    ->orWhere('model_type', '')
-                    ->orWhere('model_type', 'chat');
-            })
+            ->whereIn('owner_admin_id', $ownerIds)
+            ->userContent()
+            ->orderByRaw('CASE WHEN owner_admin_id = ? THEN 0 ELSE 1 END', [(int) $actor->getKey()])
             ->orderBy('failover_priority')
-            ->orderBy('name')
+            ->orderBy('id')
+            ->get();
+
+        return [
+            'shared_models' => $models
+                ->where('owner_admin_id', '!=', (int) $actor->getKey())
+                ->map(static fn (AiModel $model): array => SharedAiModelData::fromModel($model, true)->toArray())
+                ->values()
+                ->all(),
+            'default_options' => $models
+                ->filter(static fn (AiModel $model): bool => (string) $model->status === 'active' && $model->archived_at === null)
+                ->map(static fn (AiModel $model): array => [
+                    'id' => (int) $model->getKey(),
+                    'name' => (string) $model->name,
+                    'version' => (string) $model->version,
+                    'model_type' => (string) ($model->model_type ?: 'chat'),
+                    'source' => (int) $model->owner_admin_id === (int) $actor->getKey() ? 'personal' : 'shared',
+                ])
+                ->values()
+                ->all(),
+        ];
+    }
+
+    /** @return LengthAwarePaginator<int, array<string, mixed>> */
+    private function loadGovernanceModels(Admin $actor): LengthAwarePaginator
+    {
+        $paginator = $this->accessResolver
+            ->governanceQuery($actor)
+            ->where('owner_admin_id', '!=', $actor->getKey())
+            ->with('owner:id,username,display_name,role,status')
+            ->orderBy('owner_admin_id')
+            ->orderBy('failover_priority')
+            ->orderBy('id')
+            ->paginate(50, ['*'], 'governance_page');
+        $paginator->setCollection(
+            $paginator->getCollection()
+                ->map(static fn (AiModel $model): array => GovernanceAiModelData::fromModel($model)->toArray()),
+        );
+
+        return $paginator;
+    }
+
+    /**
+     * @param  array<int, array{id:int,name:string,version:string,model_type:string,source:string}>  $availableModels
+     * @return array{mode:string,provider_available:bool,provider_name:string,needs_repair:bool}
+     */
+    private function accessPreview(AdminAiActorContext $context, array $availableModels): array
+    {
+        $actor = $context->actor;
+        $provider = $context->sharedProvider;
+        $providerAvailable = $context->hasActiveSharedProvider();
+
+        return [
+            'mode' => $actor->shared_ai_config_owner_id === null ? 'independent' : 'shared',
+            'provider_available' => $providerAvailable,
+            'provider_name' => (string) ($provider?->display_name ?: $provider?->username),
+            'needs_repair' => $availableModels === [],
+        ];
+    }
+
+    /** @return array<int, array{id:int,name:string,version:string,model_type:string,source:string}> */
+    private function personalDefaultModelOptions(Admin $actor): array
+    {
+        return $this->accessResolver
+            ->usableQuery($actor)
+            ->select(['id', 'owner_admin_id', 'name', 'version', 'model_type'])
             ->get()
             ->map(static fn (AiModel $model): array => [
-                'id' => (int) $model->id,
+                'id' => (int) $model->getKey(),
                 'name' => (string) $model->name,
-                'model_id' => (string) ($model->model_id ?? ''),
+                'version' => (string) $model->version,
+                'model_type' => (string) ($model->model_type ?: 'chat'),
+                'source' => (int) $model->owner_admin_id === (int) $actor->getKey() ? 'personal' : 'shared',
             ])
             ->all();
     }
 
     /**
-     * 校验模型表单字段。
-     *
-     * @param  bool  $isUpdate  true 表示编辑模式（允许 api_key 为空）
-     * @return array<string, mixed>
+     * 规范化 max_tokens 输入：仅聊天模型保留正整数，其他类型视为留空。
      */
-    private function validateModelPayload(Request $request, bool $isUpdate): array
+    private function normalizeMaxTokensForModelType(mixed $value, string $modelType): ?int
     {
-        $rules = [
-            'name' => ['required', 'string', 'max:100'],
-            'version' => ['nullable', 'string', 'max:50'],
-            'api_key' => [$isUpdate ? 'nullable' : 'required', 'string', 'max:500'],
-            'model_id' => ['required', 'string', 'max:100'],
-            'model_type' => ['required', 'in:chat,embedding'],
-            'api_url' => ['nullable', 'string', 'max:500'],
-            'failover_priority' => ['nullable', 'integer', 'min:1'],
-            'daily_limit' => ['nullable', 'integer', 'min:0'],
-        ];
-        if ($isUpdate) {
-            $rules['status'] = ['nullable', 'in:active,inactive'];
+        if ($this->normalizeModelType($modelType) !== 'chat') {
+            return null;
         }
 
-        return $request->validate($rules);
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        $intValue = (int) $value;
+
+        return $intValue > 0 ? $intValue : null;
+    }
+
+    private function defaultContentMaxTokens(): int
+    {
+        return max(256, (int) config('geoflow.content_max_tokens', 16384));
+    }
+
+    private function supportsModelMaxTokens(): bool
+    {
+        return Schema::hasTable('ai_models') && Schema::hasColumn('ai_models', 'max_tokens');
     }
 
     /**
@@ -489,17 +917,6 @@ class AiModelController extends Controller
     }
 
     /**
-     * 更新默认 embedding 模型 ID。
-     */
-    private function setDefaultEmbeddingModelId(int $modelId): void
-    {
-        SiteSetting::query()->updateOrCreate(
-            ['setting_key' => 'default_embedding_model_id'],
-            ['setting_value' => (string) max(0, $modelId)]
-        );
-    }
-
-    /**
      * pgvector 可用性检测（仅在 PostgreSQL 下尝试查询扩展）。
      *
      * 说明：
@@ -516,17 +933,9 @@ class AiModelController extends Controller
             $row = DB::selectOne("SELECT extname FROM pg_extension WHERE extname = 'vector' LIMIT 1");
 
             return $row !== null;
-        } catch (\Throwable) {
+        } catch (Throwable) {
             return false;
         }
-    }
-
-    /**
-     * 对 API key 做掩码显示。
-     */
-    private function maskApiKey(string $storedApiKey): string
-    {
-        return $this->apiKeyCrypto->mask($storedApiKey);
     }
 
     /**
@@ -545,31 +954,16 @@ class AiModelController extends Controller
         return $this->apiKeyCrypto->decrypt($storedApiKey);
     }
 
-    private function resolveTestEndpoint(AiModel $model, string $modelType): string
-    {
-        $apiUrl = (string) ($model->api_url ?? '');
-        $providerBaseUrl = $modelType === 'embedding'
-            ? OpenAiRuntimeProvider::resolveEmbeddingBaseUrl($apiUrl)
-            : OpenAiRuntimeProvider::resolveChatBaseUrl($apiUrl);
-
-        if ($providerBaseUrl === '') {
-            return '';
-        }
-
-        if (OpenAiRuntimeProvider::isGeminiProviderUrl($providerBaseUrl)) {
-            $modelName = $this->normalizeGeminiModelName((string) ($model->model_id ?? ''));
-
-            return rtrim($providerBaseUrl, '/').'/models/'.$modelName.($modelType === 'embedding' ? ':batchEmbedContents' : ':generateContent');
-        }
-
-        return rtrim($providerBaseUrl, '/').($modelType === 'embedding' ? '/embeddings' : '/chat/completions');
-    }
-
     /**
      * @return array<string, mixed>
      */
-    private function buildTestPayload(string $modelName, string $modelType, bool $isGemini = false): array
-    {
+    private function buildTestPayload(
+        string $modelName,
+        string $modelType,
+        bool $isGemini = false,
+        bool $usesOpenAiResponses = false,
+        bool $isVolcengineMultimodal = false
+    ): array {
         if ($isGemini) {
             if ($modelType === 'embedding') {
                 return [
@@ -587,10 +981,10 @@ class AiModelController extends Controller
                 ];
             }
 
-            $generationConfig = [
-                'temperature' => 0,
-                'maxOutputTokens' => 64,
-            ];
+            $generationConfig = ['maxOutputTokens' => 64];
+            if ($this->supportsGeminiSamplingParameters($modelName)) {
+                $generationConfig['temperature'] = 0;
+            }
 
             $thinkingLevel = $this->resolveGeminiTestThinkingLevel($modelName);
             if ($thinkingLevel !== null) {
@@ -612,10 +1006,27 @@ class AiModelController extends Controller
             ];
         }
 
+        if ($modelType === 'embedding' && $isVolcengineMultimodal) {
+            return [
+                'model' => $modelName,
+                'input' => [
+                    ['type' => 'text', 'text' => 'GEOFlow embedding connection test'],
+                ],
+            ];
+        }
+
         if ($modelType === 'embedding') {
             return [
                 'model' => $modelName,
                 'input' => 'GEOFlow embedding connection test',
+            ];
+        }
+
+        if ($usesOpenAiResponses) {
+            return [
+                'model' => $modelName,
+                'input' => 'Reply with OK.',
+                'max_output_tokens' => 128,
             ];
         }
 
@@ -629,8 +1040,13 @@ class AiModelController extends Controller
         ];
     }
 
-    private function isValidTestResponse(mixed $json, string $modelType, bool $isGemini = false): bool
-    {
+    private function isValidTestResponse(
+        mixed $json,
+        string $modelType,
+        bool $isGemini = false,
+        bool $usesOpenAiResponses = false,
+        bool $isVolcengineMultimodal = false
+    ): bool {
         if (! is_array($json)) {
             return false;
         }
@@ -655,8 +1071,35 @@ class AiModelController extends Controller
             return false;
         }
 
+        if ($modelType === 'embedding' && $isVolcengineMultimodal) {
+            $vector = data_get($json, 'data.embedding');
+
+            return is_array($vector) && array_is_list($vector) && $vector !== []
+                && array_all($vector, static fn (mixed $value): bool => is_int($value) || (is_float($value) && is_finite($value)));
+        }
+
         if ($modelType === 'embedding') {
             return isset($json['data'][0]['embedding']) && is_array($json['data'][0]['embedding']);
+        }
+
+        if ($usesOpenAiResponses) {
+            if (trim((string) ($json['output_text'] ?? '')) !== '') {
+                return true;
+            }
+
+            foreach (($json['output'] ?? []) as $output) {
+                if (! is_array($output)) {
+                    continue;
+                }
+
+                foreach (($output['content'] ?? []) as $part) {
+                    if (is_array($part) && trim((string) ($part['text'] ?? '')) !== '') {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         return isset($json['choices'][0]['message']['content'])
@@ -680,6 +1123,10 @@ class AiModelController extends Controller
     {
         $modelName = strtolower($this->normalizeGeminiModelName($modelName));
 
+        if (preg_match('/^gemini-3\.\d+-/', $modelName) === 1) {
+            return 'low';
+        }
+
         if (str_starts_with($modelName, 'gemini-3-flash')) {
             return 'minimal';
         }
@@ -691,30 +1138,191 @@ class AiModelController extends Controller
         return null;
     }
 
+    private function supportsGeminiSamplingParameters(string $modelName): bool
+    {
+        $modelName = strtolower($this->normalizeGeminiModelName($modelName));
+        if (preg_match('/^gemini-(\d+)(?:\.(\d+))?-/', $modelName, $matches) !== 1) {
+            return true;
+        }
+
+        $major = (int) ($matches[1] ?? 0);
+        $minor = isset($matches[2]) && $matches[2] !== '' ? (int) $matches[2] : 0;
+
+        return $major < 3 || ($major === 3 && $minor < 5);
+    }
+
     private function modelTestResponse(
         bool $success,
         string $message,
         float $startedAt,
         string $modelType,
         string $endpoint = '',
-        ?int $httpStatus = null
+        ?int $httpStatus = null,
+        array $extraMeta = [],
+        ?array $diagnosis = null,
     ): JsonResponse {
+        $meta = [
+            'model_type' => $modelType,
+            'http_status' => $httpStatus,
+            'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+            'endpoint' => $success ? $endpoint : '',
+        ] + $extraMeta;
+        if (! $success && $diagnosis !== null) {
+            $meta['diagnosis'] = $diagnosis;
+        }
+
         return response()->json([
             'success' => $success,
             'message' => $message,
-            'meta' => [
-                'model_type' => $modelType,
-                'http_status' => $httpStatus,
-                'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
-                'endpoint' => $endpoint,
-            ],
+            'meta' => $meta,
         ], $success ? 200 : 422);
     }
 
-    private function previewResponseBody(string $body): string
+    private function safeRemoteDetail(Response $response, string $apiKey): string
     {
-        $body = trim(preg_replace('/\s+/u', ' ', $body) ?: $body);
+        $payload = $response->json();
+        $message = $this->extractRemoteMessage($payload);
+        if ($message !== null) {
+            return $this->sanitizeRemoteText($message, $apiKey);
+        }
 
-        return mb_strlen($body, 'UTF-8') > 240 ? mb_substr($body, 0, 240, 'UTF-8').'...' : $body;
+        foreach (preg_split('/\R/u', mb_substr($response->body(), 0, 4000, 'UTF-8')) ?: [] as $line) {
+            $line = trim($line);
+            if (! str_starts_with($line, 'data:')) {
+                continue;
+            }
+
+            $eventPayload = json_decode(trim(substr($line, strlen('data:'))), true);
+            $message = $this->extractRemoteMessage($eventPayload);
+            if ($message !== null) {
+                return $this->sanitizeRemoteText($message, $apiKey);
+            }
+        }
+
+        $plainBody = trim(strip_tags(mb_substr($response->body(), 0, 2000, 'UTF-8')));
+        if ($plainBody !== '') {
+            return $this->sanitizeRemoteText($plainBody, $apiKey);
+        }
+
+        return 'The upstream service returned no readable error detail.';
+    }
+
+    private function extractRemoteMessage(mixed $payload): ?string
+    {
+        $candidates = is_array($payload) ? [
+            data_get($payload, 'error.message'),
+            data_get($payload, 'error.detail'),
+            data_get($payload, 'error'),
+            data_get($payload, 'detail'),
+            data_get($payload, 'message'),
+            data_get($payload, 'msg'),
+        ] : [];
+
+        foreach ($candidates as $candidate) {
+            if (is_scalar($candidate) && trim((string) $candidate) !== '') {
+                return trim((string) $candidate);
+            }
+        }
+
+        return null;
+    }
+
+    private function sanitizeRemoteText(string $text, string $apiKey): string
+    {
+        $sanitized = str_replace($apiKey, '[redacted]', $text);
+        if (strlen($apiKey) >= 8) {
+            $prefix = substr($apiKey, 0, 8);
+            $suffix = substr($apiKey, -4);
+            $sanitized = str_replace($prefix, '[redacted]', $sanitized);
+            $sanitized = preg_replace('/(?:\*|•|x){2,}\s*'.preg_quote($suffix, '/').'/iu', '[redacted]', $sanitized) ?? $sanitized;
+            $sanitized = str_replace($suffix, '[redacted]', $sanitized);
+        }
+        $sanitized = preg_replace('/\bBearer\s+[A-Za-z0-9._~+\/=:-]{8,}/iu', 'Bearer [redacted]', $sanitized) ?? $sanitized;
+        $sanitized = preg_replace('/\bsk-[A-Za-z0-9_-]{8,}\b/u', '[redacted]', $sanitized) ?? $sanitized;
+        $sanitized = preg_replace('/\bark-[A-Za-z0-9._-]{4,}\b/iu', '[redacted]', $sanitized) ?? $sanitized;
+        $sanitized = preg_replace('/[\x00-\x1F\x7F]+/u', ' ', $sanitized) ?? $sanitized;
+        $sanitized = preg_replace('/\s+/u', ' ', trim($sanitized)) ?? trim($sanitized);
+
+        return mb_substr($sanitized, 0, 500, 'UTF-8');
+    }
+
+    private function safeExceptionDetail(Throwable $exception): string
+    {
+        if ($exception instanceof AiModelAccessException) {
+            return $exception->getErrorCode();
+        }
+
+        if ($exception instanceof OutboundRequestBlockedException) {
+            return match ($exception->reasonCode) {
+                'dns_resolution_failed' => 'DNS resolution failed. Check container DNS and retry.',
+                'unsafe_address', 'mapped_address' => 'The API address was blocked by the outbound security policy.',
+                'response_too_large' => 'The upstream response exceeded the configured safety limit.',
+                default => 'The outbound request was blocked ('.$exception->reasonCode.').',
+            };
+        }
+
+        if ($exception instanceof OutboundRequestFailedException) {
+            return 'The network request failed. Check DNS, TLS, and upstream availability.';
+        }
+
+        return 'An unexpected backend error occurred. Check the application log.';
+    }
+
+    private function recordModelTestAttempt(AiUsageReservation $reservation): void
+    {
+        try {
+            $this->usageQuota->recordModelOutboundAttempt($reservation);
+        } catch (Throwable $exception) {
+            report($exception);
+        }
+    }
+
+    private function releaseModelTestReservation(AiUsageReservation $reservation): void
+    {
+        try {
+            $this->usageQuota->releaseModel($reservation);
+        } catch (Throwable $exception) {
+            report($exception);
+        }
+    }
+
+    private function invalidateQualityModelAfterCommit(int $modelId, string $reason): void
+    {
+        try {
+            $this->qualityInvalidationService->invalidateModel($modelId, $reason);
+        } catch (Throwable $exception) {
+            report($exception);
+            Log::warning('AI quality model invalidation failed after model mutation.', [
+                'ai_model_id' => $modelId,
+                'exception' => $exception::class,
+            ]);
+        }
+    }
+
+    /** @param list<string>|null $columns */
+    private function configurableModel(
+        Request $request,
+        int $modelId,
+        string $ability,
+        ?array $columns = null,
+    ): AiModel {
+        $actor = $this->activeActor($request);
+        $query = $this->accessResolver->managementQuery($actor);
+        if ($columns !== null) {
+            $query->select($columns);
+        }
+
+        $model = $query->whereKey($modelId)->firstOrFail();
+        Gate::forUser($actor)->authorize($ability, $model);
+
+        return $model;
+    }
+
+    private function activeActor(Request $request): Admin
+    {
+        $actor = $request->user('admin');
+        abort_unless($actor instanceof Admin && (string) $actor->status === 'active', 404);
+
+        return $actor;
     }
 }

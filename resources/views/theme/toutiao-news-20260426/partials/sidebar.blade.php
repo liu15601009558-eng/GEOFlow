@@ -1,6 +1,6 @@
 @php
     $sidebarHotArticles = collect($hotArticles ?? [])->take(6);
-    $latestArticles = method_exists($articles ?? null, 'getCollection')
+    $latestArticles = is_object($articles ?? null) && method_exists($articles, 'getCollection')
         ? $articles->getCollection()->take(6)
         : collect($articles ?? [])->take(6);
     $sidebarArticles = $sidebarHotArticles->isNotEmpty() ? $sidebarHotArticles : $latestArticles;
@@ -24,7 +24,7 @@
         </div>
         <div class="tt-hot-list">
             @forelse($sidebarArticles as $hotArticle)
-                <a href="{{ route('site.article', $hotArticle->slug) }}" class="tt-hot-item">
+                <a href="{{ $siteUrls->article($hotArticle) }}" class="tt-hot-item">
                     <span class="tt-hot-index">{{ $loop->iteration }}</span>
                     <span>{{ $hotArticle->title }}</span>
                 </a>
