@@ -57,6 +57,7 @@ final class AiModelFailoverDecider
 
         return $transientFailure
             || str_contains($message, 'ai返回空正文')
+            || str_contains($message, 'ai 生成正文过短')
             || str_contains($message, 'ai 返回空流式响应');
     }
 }

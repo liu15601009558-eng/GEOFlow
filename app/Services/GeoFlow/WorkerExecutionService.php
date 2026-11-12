@@ -1197,6 +1197,18 @@ class WorkerExecutionService
                     throw new RuntimeException('AI返回空正文');
                 }
 
+                $minChars = max(0, (int) config('geoflow.content_min_chars', 800));
+                $contentChars = mb_strlen(trim($content));
+                if ($minChars > 0 && $contentChars < $minChars) {
+                    // 免费池偶发在首个分片后断流，框架会把已收到的少量文本当作完整响应返回。
+                    // 这类残稿一旦入库并自动发布，会直接产生近空白页面，因此必须失败并触发模型切换。
+                    throw new RuntimeException(sprintf(
+                        'AI 生成正文过短（%d 字，低于下限 %d 字），疑似流式输出提前中断',
+                        $contentChars,
+                        $minChars,
+                    ));
+                }
+
                 $this->warnIfContentLooksTruncated($content, $aiModel, $response);
 
                 return $persistGeneratedContent([
