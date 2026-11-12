@@ -6,7 +6,36 @@ services:
   postgres:
     image: ignore
 
-  # 队列用 database 驱动，不需要 redis
+  # 队列仍用 database 驱动；redis 供 3.2.1 调度命令（ai-quality 对账、horizon 快照等）使用
+  redis:
+    image: redis:8-alpine
+    container_name: geo-system-redis
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
+    # 以 root 启动，镜像入口脚本才会修改 /data 属主并降权。
+    user: "0:0"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        set -- redis-server --appendonly yes --dir /data
+        if [ -n "$${REDIS_PASSWORD:-}" ]; then
+          set -- "$$@" --requirepass "$${REDIS_PASSWORD}"
+        fi
+        exec /usr/local/bin/docker-entrypoint.sh "$$@"
+    volumes:
+      - ${REDIS_DATA_DIR:-./docker-data/prod/redis}:/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "if [ -n \"$${REDIS_PASSWORD:-}\" ]; then redis-cli -a \"$${REDIS_PASSWORD}\" ping; else redis-cli ping; fi",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
 
   app:
     image: geoflow-app:latest
@@ -55,4 +84,39 @@ services:
     command: ["php", "artisan", "schedule:work"]
     volumes:
       - ./:/var/www/html
+    restart: unless-stopped
+
+  # 3.2.1 AI 质量体系消费者（上游 docker-compose.prod.yml 同款命令，单副本适配本部署规模）
+  ai-quality-queue:
+    image: geoflow-app:latest
+    container_name: geo-system-ai-quality
+    working_dir: /var/www/html
+    env_file:
+      - ./.env.prod
+    command: ["php", "-d", "memory_limit=256M", "artisan", "geoflow:work-ai-quality", "front"]
+    mem_limit: 384m
+    stop_grace_period: 260s
+    volumes:
+      - ./:/var/www/html
+      - ./infra/php-queue-memory.ini:/usr/local/etc/php/conf.d/99-geoflow-memory.ini:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  ai-quality-backfill-queue:
+    image: geoflow-app:latest
+    container_name: geo-system-ai-quality-backfill
+    working_dir: /var/www/html
+    env_file:
+      - ./.env.prod
+    command: ["php", "-d", "memory_limit=192M", "artisan", "geoflow:work-ai-quality", "backfill"]
+    mem_limit: 256m
+    stop_grace_period: 260s
+    volumes:
+      - ./:/var/www/html
+      - ./infra/php-queue-memory.ini:/usr/local/etc/php/conf.d/99-geoflow-memory.ini:ro
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
