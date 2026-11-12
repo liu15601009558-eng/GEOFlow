@@ -56,7 +56,7 @@ services:
     working_dir: /var/www/html
     env_file:
       - ./.env.prod
-    command: ["php", "artisan", "queue:work", "database", "--queue=geoflow", "--sleep=1", "--tries=3", "--timeout=300", "--memory=512"]
+    command: ["php", "artisan", "queue:work", "database", "--queue=geoflow", "--sleep=1", "--tries=3", "--timeout=930", "--memory=512"]
     volumes:
       - ./:/var/www/html
       - ./infra/php-queue-memory.ini:/usr/local/etc/php/conf.d/99-geoflow-memory.ini:ro
@@ -69,7 +69,7 @@ services:
     working_dir: /var/www/html
     env_file:
       - ./.env.prod
-    command: ["php", "artisan", "queue:work", "database", "--queue=distribution,default", "--sleep=1", "--tries=3", "--timeout=300", "--memory=512"]
+    command: ["php", "artisan", "queue:work", "database", "--queue=distribution,default", "--sleep=1", "--tries=3", "--timeout=930", "--memory=512"]
     volumes:
       - ./:/var/www/html
       - ./infra/php-queue-memory.ini:/usr/local/etc/php/conf.d/99-geoflow-memory.ini:ro

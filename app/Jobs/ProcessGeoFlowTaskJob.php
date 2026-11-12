@@ -37,9 +37,10 @@ class ProcessGeoFlowTaskJob implements ShouldQueue
     public int $tries = 1;
 
     /**
-     * 单次执行超时（秒）。
+     * 单次执行超时（秒）。须大于模型单次调用的最长耗时（PROVIDER_TIMEOUT_SECONDS），
+     * 且小于队列 retry_after（960），避免任务执行中被队列重复领取。
      */
-    public int $timeout = 300;
+    public int $timeout = 900;
 
     private ?AiExecutionContext $executionContext = null;
 

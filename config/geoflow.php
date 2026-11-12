@@ -306,8 +306,9 @@ return [
     'embedding_batch_size' => max(1, min(64, (int) env('GEOFLOW_EMBEDDING_BATCH_SIZE', 1))),
     // 文章发布后是否自动加入收录追踪队列；收录查询尚未实现，默认关闭以避免写入无效追踪数据。
     'article_tracking_enabled' => filter_var(env('GEOFLOW_ARTICLE_TRACKING_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
-    // 智能模型切换（smart_failover）一轮生成的总耗时预算（秒），须小于队列硬超时。
-    'model_failover_deadline_seconds' => max(30, (int) env('GEOFLOW_MODEL_FAILOVER_DEADLINE_SECONDS', 240)),
+    // 智能模型切换（smart_failover）一轮生成的总耗时预算（秒），
+    // 须大于单次模型调用超时（PROVIDER_TIMEOUT_SECONDS），且小于队列硬超时（930）。
+    'model_failover_deadline_seconds' => max(30, (int) env('GEOFLOW_MODEL_FAILOVER_DEADLINE_SECONDS', 720)),
     // 管理员 AI 执行身份灰度开关：先写入和 Shadow，对账完成后再逐步强制访问与撤权边界。
     'admin_ai_access' => [
         'ownership_write_enabled' => filter_var(env('GEOFLOW_ADMIN_AI_OWNERSHIP_WRITE_ENABLED', true), FILTER_VALIDATE_BOOL),
