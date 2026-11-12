@@ -696,7 +696,13 @@ class JobQueueService
      *
      * @return int 成功重新投递的记录数
      */
-    public function recoverStaleJobs(int $timeoutSeconds = 600, int $limit = 100): int
+    /**
+     * 回收卡在 pending/running 的执行记录。
+     *
+     * 阈值必须大于队列与作业硬超时（queue --timeout=930、ProcessGeoFlowTaskJob::$timeout=900），
+     * 否则耗时较长的正文生成会被误判为卡死而重复入队，产生重复文章。
+     */
+    public function recoverStaleJobs(int $timeoutSeconds = 1200, int $limit = 100): int
     {
         $threshold = now()->subSeconds(max(60, $timeoutSeconds));
         $limit = max(1, min(500, $limit));

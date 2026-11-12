@@ -62,6 +62,21 @@ services:
       - ./infra/php-queue-memory.ini:/usr/local/etc/php/conf.d/99-geoflow-memory.ini:ro
     restart: unless-stopped
 
+  # 第二个生成 worker：任务级串行保护下同时最多 2 个活跃任务，
+  # 单 worker 会被长文生成（单篇 60-500s）串行阻塞，双 worker 才能跑满并发。
+  # 模型组为 round_robin，两个 worker 会自动命中不同 API Key，互不抢同一账号限流。
+  queue-gen2:
+    image: geoflow-app:latest
+    container_name: geo-system-queue-2
+    working_dir: /var/www/html
+    env_file:
+      - ./.env.prod
+    command: ["php", "artisan", "queue:work", "database", "--queue=geoflow", "--sleep=1", "--tries=3", "--timeout=930", "--memory=512"]
+    volumes:
+      - ./:/var/www/html
+      - ./infra/php-queue-memory.ini:/usr/local/etc/php/conf.d/99-geoflow-memory.ini:ro
+    restart: unless-stopped
+
   # 分发专用 worker：与 geoflow 队列解耦，避免生成失败重试时分发任务被饿死
   queue-dist:
     image: geoflow-app:latest
