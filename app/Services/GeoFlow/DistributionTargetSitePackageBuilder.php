@@ -2637,6 +2637,34 @@ function localizeArticleAssets(array $config, array $article, array $assets): ar
         }
     }
 
+    // 图片 SEO：给无 alt 的图片补语义化 alt（文章标题派生）
+    $altBase = trim((string) ($article['title'] ?? ''));
+    if ($altBase !== '') {
+        $altSafe = htmlspecialchars(str_replace(["\r", "\n"], ' ', $altBase), ENT_QUOTES, 'UTF-8');
+        foreach (['content_html', 'content'] as $field) {
+            if (! is_string($article[$field] ?? null) || $article[$field] === '') {
+                continue;
+            }
+            $n = 0;
+            $article[$field] = preg_replace_callback(
+                '/<img\b(?![^>]*\balt=)([^>]*?)\/?>/i',
+                function (array $m) use ($altSafe, &$n): string {
+                    $n++;
+                    return '<img'.$m[1].' alt="'.htmlspecialchars($altSafe.' - 配图'.$n, ENT_QUOTES, 'UTF-8', false).'">';
+                },
+                (string) $article[$field]
+            );
+            $article[$field] = preg_replace_callback(
+                '/!\[\s*\]\(([^)\s]+)\)/',
+                function (array $m) use ($altSafe, &$n): string {
+                    $n++;
+                    return '!['.$altSafe.' - 配图'.$n.']('.$m[1].')';
+                },
+                (string) $article[$field]
+            );
+        }
+    }
+
     return $article;
 }
 
@@ -3517,10 +3545,20 @@ function renderArticlePage(array $config, string $slug): void
     $settings = siteSettings($config);
     $articleUrl = frontSiteUrl($config, articlePermalinkPath($config, $article));
     $articleDescription = articleMetaDescription($article);
+    // 蚕食治理：canonical 映射命中时指向簇内主文章（映射文件 storage/canonical-map.json）
+    $canonicalUrl = $articleUrl;
+    $canonicalTarget = canonicalSlugFor($config, $slug);
+    if ($canonicalTarget !== $slug) {
+        $mainArticle = findArticle($config, $canonicalTarget);
+        if ($mainArticle) {
+            $canonicalUrl = frontSiteUrl($config, articlePermalinkPath($config, $mainArticle));
+            $articleUrl = $canonicalUrl;
+        }
+    }
     pageHeader($config, $title, [
         'description' => $articleDescription,
         'keywords' => articleMetaKeywords($article),
-        'canonical_url' => $articleUrl,
+        'canonical_url' => $canonicalUrl,
         'og_type' => 'article',
     ]);
     echo jsonLdScript([
@@ -3586,12 +3624,65 @@ function renderArticlePage(array $config, string $slug): void
         echo '</div>';
     }
     echo '</article>';
+    renderRelatedArticles($config, $article, $slug);
     if ($isApparel) {
         echo '</main>';
         renderApparelSidebar($config, $settings, articleSummaries($config));
         echo '</div>';
     }
     pageFooter($config);
+}
+
+function canonicalSlugFor(array $config, string $slug): string
+{
+    static $map = null;
+    if ($map === null) {
+        $map = [];
+        $file = storageRoot($config).'/canonical-map.json';
+        if (is_file($file)) {
+            $decoded = json_decode((string) @file_get_contents($file), true);
+            if (is_array($decoded)) {
+                $map = $decoded;
+            }
+        }
+    }
+    $target = (string) ($map[$slug] ?? '');
+
+    return $target !== '' && $target !== $slug ? $target : $slug;
+}
+
+function renderRelatedArticles(array $config, array $article, string $slug): void
+{
+    $list = articleSummaries($config);
+    if (count($list) < 2) {
+        return;
+    }
+    $catName = is_array($article['category'] ?? null) ? (string) ($article['category']['name'] ?? '') : '';
+    $sameCat = [];
+    $others = [];
+    foreach ($list as $item) {
+        $itemSlug = (string) ($item['slug'] ?? '');
+        if ($itemSlug === '' || $itemSlug === $slug) {
+            continue;
+        }
+        $itemCat = is_array($item['category'] ?? null) ? (string) ($item['category']['name'] ?? '') : '';
+        if ($catName !== '' && $itemCat === $catName) {
+            $sameCat[] = $item;
+        } else {
+            $others[] = $item;
+        }
+    }
+    $related = array_slice(array_merge($sameCat, $others), 0, 5);
+    if ($related === []) {
+        return;
+    }
+
+    echo '<div class="related-articles" style="margin:24px 0;padding-top:16px;border-top:1px solid #eee">';
+    echo '<h3 style="font-size:18px;margin:0 0 12px">相关阅读</h3><ul style="list-style:none;padding:0;margin:0">';
+    foreach ($related as $item) {
+        echo '<li style="padding:6px 0"><a href="'.h(frontSiteUrl($config, '/article/'.rawurlencode((string) $item['slug']))).'">'.h((string) ($item['title'] ?? '未命名文章')).'</a></li>';
+    }
+    echo '</ul></div>';
 }
 
 function textMapLine(string $value): string
